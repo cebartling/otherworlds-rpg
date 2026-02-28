@@ -147,6 +147,7 @@ mod tests {
         handle_apply_effect, handle_set_flag, handle_update_disposition,
     };
     use crate::domain::commands::{ApplyEffect, SetFlag, UpdateDisposition};
+    use crate::domain::events::WorldStateEventKind;
 
     #[derive(Debug)]
     struct FixedClock(DateTime<Utc>);
@@ -236,6 +237,15 @@ mod tests {
         assert_eq!(stored.correlation_id, correlation_id);
         assert_eq!(stored.causation_id, correlation_id);
         assert_eq!(stored.occurred_at, fixed_now);
+
+        let kind: WorldStateEventKind = serde_json::from_value(stored.payload.clone()).unwrap();
+        match kind {
+            WorldStateEventKind::WorldFactChanged(payload) => {
+                assert_eq!(payload.world_id, world_id);
+                assert_eq!(payload.fact_key, "quest_complete");
+            }
+            other => panic!("expected WorldFactChanged, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -275,6 +285,16 @@ mod tests {
         assert_eq!(stored.correlation_id, correlation_id);
         assert_eq!(stored.causation_id, correlation_id);
         assert_eq!(stored.occurred_at, fixed_now);
+
+        let kind: WorldStateEventKind = serde_json::from_value(stored.payload.clone()).unwrap();
+        match kind {
+            WorldStateEventKind::FlagSet(payload) => {
+                assert_eq!(payload.world_id, world_id);
+                assert_eq!(payload.flag_key, "door_unlocked");
+                assert!(payload.value);
+            }
+            other => panic!("expected FlagSet, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -314,6 +334,15 @@ mod tests {
         assert_eq!(stored.correlation_id, correlation_id);
         assert_eq!(stored.causation_id, correlation_id);
         assert_eq!(stored.occurred_at, fixed_now);
+
+        let kind: WorldStateEventKind = serde_json::from_value(stored.payload.clone()).unwrap();
+        match kind {
+            WorldStateEventKind::DispositionUpdated(payload) => {
+                assert_eq!(payload.world_id, world_id);
+                assert_eq!(payload.entity_id, entity_id);
+            }
+            other => panic!("expected DispositionUpdated, got {other:?}"),
+        }
     }
 
     #[tokio::test]

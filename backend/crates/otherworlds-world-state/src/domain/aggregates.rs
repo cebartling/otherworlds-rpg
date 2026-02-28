@@ -228,6 +228,32 @@ mod tests {
     }
 
     #[test]
+    fn test_set_flag_produces_flag_set_event_with_false_value() {
+        // Arrange
+        let world_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let mut snapshot = WorldSnapshot::new(world_id);
+
+        // Act
+        snapshot.set_flag("door_unlocked".to_owned(), false, correlation_id, &clock);
+
+        // Assert
+        let events = snapshot.uncommitted_events();
+        assert_eq!(events.len(), 1);
+
+        match &events[0].kind {
+            WorldStateEventKind::FlagSet(payload) => {
+                assert_eq!(payload.world_id, world_id);
+                assert_eq!(payload.flag_key, "door_unlocked");
+                assert!(!payload.value);
+            }
+            other => panic!("expected FlagSet, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_update_disposition_produces_disposition_updated_event() {
         // Arrange
         let world_id = Uuid::new_v4();
