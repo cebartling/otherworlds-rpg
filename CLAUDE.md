@@ -153,4 +153,11 @@ Do not write production code without a corresponding failing test. Do not skip t
 
 ## Current State
 
-The project is scaffolded but early-stage. Domain crate structures exist with types defined. Route handlers and the event store are stubs (`todo!()` or empty `Router::new()`). No tests exist yet. Implementation should follow the established patterns in `otherworlds-core`.
+The project is early-stage. Core abstractions and the event store are implemented. Domain crate structures exist with types defined.
+
+- **`otherworlds-core`** — Trait abstractions fully defined (`EventRepository`, `Clock`, `DeterministicRng`, `DomainError`, etc.).
+- **`otherworlds-event-store`** — `PgEventRepository` fully implemented with `load_events`, `append_events`, proactive optimistic concurrency control, batch INSERT via UNNEST, and tracing instrumentation. 10 integration tests.
+- **`otherworlds-api`** — Server boots with `AppState` holding `PgPool`, `Clock`, and `Rng`. `PgEventRepository` is not yet wired into `AppState`. Route handlers return empty `Router::new()`.
+- **Domain crates** — Directory structure and type stubs exist. Command/query handler files are placeholders awaiting implementation.
+
+Implementation should follow the established patterns in `otherworlds-core`.
