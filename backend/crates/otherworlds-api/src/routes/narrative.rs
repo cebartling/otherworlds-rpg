@@ -3,6 +3,7 @@
 use axum::extract::State;
 use axum::{Json, Router, routing::post};
 use serde::{Deserialize, Serialize};
+use tracing::{info, instrument};
 use uuid::Uuid;
 
 use otherworlds_narrative::application::command_handlers;
@@ -33,6 +34,7 @@ pub struct CommandResponse {
 }
 
 /// POST /advance-beat
+#[instrument(skip(state, request), fields(session_id = %request.session_id))]
 async fn advance_beat(
     State(state): State<AppState>,
     Json(request): Json<AdvanceBeatRequest>,
@@ -41,6 +43,8 @@ async fn advance_beat(
         correlation_id: Uuid::new_v4(),
         session_id: request.session_id,
     };
+
+    info!(correlation_id = %command.correlation_id, "handling advance_beat command");
 
     let stored_events = command_handlers::handle_advance_beat(
         &command,
@@ -55,6 +59,7 @@ async fn advance_beat(
 }
 
 /// POST /present-choice
+#[instrument(skip(state, request), fields(session_id = %request.session_id))]
 async fn present_choice(
     State(state): State<AppState>,
     Json(request): Json<PresentChoiceRequest>,
@@ -63,6 +68,8 @@ async fn present_choice(
         correlation_id: Uuid::new_v4(),
         session_id: request.session_id,
     };
+
+    info!(correlation_id = %command.correlation_id, "handling present_choice command");
 
     let stored_events = command_handlers::handle_present_choice(
         &command,
