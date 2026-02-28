@@ -1,0 +1,37 @@
+[package]
+name = "otherworlds-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Axum HTTP API server for the Otherworlds RPG engine"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "otherworlds-api"
+path = "src/main.rs"
+
+[dependencies]
+# Internal crates
+otherworlds-core = { path = "../otherworlds-core" }
+otherworlds-event-store = { path = "../otherworlds-event-store" }
+otherworlds-narrative = { path = "../otherworlds-narrative" }
+otherworlds-rules = { path = "../otherworlds-rules" }
+otherworlds-world-state = { path = "../otherworlds-world-state" }
+otherworlds-character = { path = "../otherworlds-character" }
+otherworlds-inventory = { path = "../otherworlds-inventory" }
+otherworlds-session = { path = "../otherworlds-session" }
+otherworlds-content = { path = "../otherworlds-content" }
+
+# External dependencies
+axum = { workspace = true }
+tokio = { workspace = true }
+tower-http = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sqlx = { workspace = true }
+uuid = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
