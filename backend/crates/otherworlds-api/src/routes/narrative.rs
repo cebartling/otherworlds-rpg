@@ -159,20 +159,19 @@ mod tests {
         }
     }
 
-    fn test_app_state() -> AppState {
+    fn app_state_with(event_repository: Arc<dyn EventRepository>) -> AppState {
         let pool = PgPool::connect_lazy("postgres://localhost/test").unwrap();
         let clock: Arc<dyn Clock + Send + Sync> = Arc::new(FixedClock(Utc::now()));
         let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
-        let event_repository: Arc<dyn EventRepository> = Arc::new(MockEventRepository);
         AppState::new(pool, clock, rng, event_repository)
     }
 
+    fn test_app_state() -> AppState {
+        app_state_with(Arc::new(MockEventRepository))
+    }
+
     fn failing_app_state() -> AppState {
-        let pool = PgPool::connect_lazy("postgres://localhost/test").unwrap();
-        let clock: Arc<dyn Clock + Send + Sync> = Arc::new(FixedClock(Utc::now()));
-        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
-        let event_repository: Arc<dyn EventRepository> = Arc::new(FailingEventRepository);
-        AppState::new(pool, clock, rng, event_repository)
+        app_state_with(Arc::new(FailingEventRepository))
     }
 
     #[tokio::test]
