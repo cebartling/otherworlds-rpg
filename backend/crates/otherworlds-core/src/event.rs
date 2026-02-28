@@ -26,7 +26,7 @@ pub struct EventMetadata {
 /// Trait that all domain events implement.
 pub trait DomainEvent: Send + Sync + std::fmt::Debug {
     /// Returns the event type name (used for serialization routing).
-    fn event_type(&self) -> &str;
+    fn event_type(&self) -> &'static str;
 
     /// Serializes the event payload to JSON.
     fn to_payload(&self) -> serde_json::Value;

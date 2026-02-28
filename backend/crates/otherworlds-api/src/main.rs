@@ -1,5 +1,6 @@
 //! Otherworlds RPG API server entry point.
 
+use std::error::Error;
 use std::net::SocketAddr;
 
 use axum::Router;
@@ -12,7 +13,7 @@ mod routes;
 mod state;
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn Error>> {
     // Initialize tracing subscriber.
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -24,26 +25,25 @@ async fn main() {
     tracing::info!("Starting Otherworlds RPG API server");
 
     // Read configuration from environment.
-    let database_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
-        "postgres://otherworlds:otherworlds@localhost:5432/otherworlds".to_string()
-    });
+    let database_url = std::env::var("DATABASE_URL")
+        .map_err(|_| "DATABASE_URL environment variable must be set")?;
     let host = std::env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
     let port: u16 = std::env::var("PORT")
         .unwrap_or_else(|_| "3000".to_string())
         .parse()
-        .expect("PORT must be a valid u16");
+        .map_err(|e| format!("PORT must be a valid u16: {e}"))?;
 
     // Create database connection pool.
     let pool = PgPoolOptions::new()
         .max_connections(10)
         .connect(&database_url)
-        .await
-        .expect("Failed to connect to PostgreSQL");
+        .await?;
 
     // Build application state.
     let app_state = state::AppState::new(pool);
 
     // Build router.
+    // TODO: Replace CorsLayer::permissive() with restricted origins for production.
     let app = Router::new()
         .merge(routes::health::router())
         .nest("/api/v1/narrative", routes::narrative::router())
@@ -60,14 +60,12 @@ async fn main() {
     // Start server.
     let addr: SocketAddr = format!("{host}:{port}")
         .parse()
-        .expect("Invalid HOST:PORT combination");
+        .map_err(|e| format!("invalid HOST:PORT combination: {e}"))?;
     tracing::info!("Listening on {}", addr);
 
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .expect("Failed to bind to address");
+    let listener = tokio::net::TcpListener::bind(addr).await?;
 
-    axum::serve(listener, app)
-        .await
-        .expect("Server error");
+    axum::serve(listener, app).await?;
+
+    Ok(())
 }

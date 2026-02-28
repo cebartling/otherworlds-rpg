@@ -5,7 +5,7 @@ use sqlx::PgPool;
 /// Application state shared across all request handlers.
 #[derive(Debug, Clone)]
 pub struct AppState {
-    /// PostgreSQL connection pool.
+    /// `PostgreSQL` connection pool.
     pub db_pool: PgPool,
 }
 

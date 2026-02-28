@@ -1,5 +1,6 @@
 //! Domain events for the Character Management context.
 
+use otherworlds_core::event::{DomainEvent, EventMetadata};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -30,4 +31,43 @@ pub struct ExperienceGained {
     pub character_id: Uuid,
     /// The amount of experience gained.
     pub amount: u32,
+}
+
+/// Event payload variants for the Character Management context.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum CharacterEventKind {
+    /// A character has been created.
+    CharacterCreated(CharacterCreated),
+    /// A character attribute has been modified.
+    AttributeModified(AttributeModified),
+    /// A character has gained experience.
+    ExperienceGained(ExperienceGained),
+}
+
+/// Domain event envelope for the Character Management context.
+#[derive(Debug, Clone)]
+pub struct CharacterEvent {
+    /// Event metadata.
+    pub metadata: EventMetadata,
+    /// Event-specific payload.
+    pub kind: CharacterEventKind,
+}
+
+impl DomainEvent for CharacterEvent {
+    fn event_type(&self) -> &'static str {
+        match &self.kind {
+            CharacterEventKind::CharacterCreated(_) => "character.character_created",
+            CharacterEventKind::AttributeModified(_) => "character.attribute_modified",
+            CharacterEventKind::ExperienceGained(_) => "character.experience_gained",
+        }
+    }
+
+    fn to_payload(&self) -> serde_json::Value {
+        // Serialization of derived Serialize types to Value is infallible.
+        serde_json::to_value(&self.kind).expect("CharacterEventKind serialization is infallible")
+    }
+
+    fn metadata(&self) -> &EventMetadata {
+        &self.metadata
+    }
 }

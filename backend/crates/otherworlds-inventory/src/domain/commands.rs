@@ -1,5 +1,6 @@
 //! Commands for the Inventory & Economy context.
 
+use otherworlds_core::command::Command;
 use uuid::Uuid;
 
 /// Command to add an item to an inventory.
@@ -13,6 +14,16 @@ pub struct AddItem {
     pub item_id: Uuid,
 }
 
+impl Command for AddItem {
+    fn command_type(&self) -> &'static str {
+        "inventory.add_item"
+    }
+
+    fn correlation_id(&self) -> Uuid {
+        self.correlation_id
+    }
+}
+
 /// Command to remove an item from an inventory.
 #[derive(Debug, Clone)]
 pub struct RemoveItem {
@@ -24,6 +35,16 @@ pub struct RemoveItem {
     pub item_id: Uuid,
 }
 
+impl Command for RemoveItem {
+    fn command_type(&self) -> &'static str {
+        "inventory.remove_item"
+    }
+
+    fn correlation_id(&self) -> Uuid {
+        self.correlation_id
+    }
+}
+
 /// Command to equip an item.
 #[derive(Debug, Clone)]
 pub struct EquipItem {
@@ -33,4 +54,14 @@ pub struct EquipItem {
     pub inventory_id: Uuid,
     /// The item identifier.
     pub item_id: Uuid,
+}
+
+impl Command for EquipItem {
+    fn command_type(&self) -> &'static str {
+        "inventory.equip_item"
+    }
+
+    fn correlation_id(&self) -> Uuid {
+        self.correlation_id
+    }
 }

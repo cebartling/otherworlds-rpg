@@ -1,4 +1,4 @@
-//! PostgreSQL implementation of the `EventRepository` trait.
+//! `PostgreSQL` implementation of the `EventRepository` trait.
 
 use async_trait::async_trait;
 use sqlx::PgPool;

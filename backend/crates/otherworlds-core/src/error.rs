@@ -11,7 +11,9 @@ pub enum DomainError {
     AggregateNotFound(Uuid),
 
     /// Optimistic concurrency conflict.
-    #[error("concurrency conflict on aggregate {aggregate_id}: expected version {expected}, found {actual}")]
+    #[error(
+        "concurrency conflict on aggregate {aggregate_id}: expected version {expected}, found {actual}"
+    )]
     ConcurrencyConflict {
         /// The aggregate that had the conflict.
         aggregate_id: Uuid,

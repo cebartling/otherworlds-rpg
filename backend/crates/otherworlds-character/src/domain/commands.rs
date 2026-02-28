@@ -1,5 +1,6 @@
 //! Commands for the Character Management context.
 
+use otherworlds_core::command::Command;
 use uuid::Uuid;
 
 /// Command to create a new character.
@@ -9,6 +10,16 @@ pub struct CreateCharacter {
     pub correlation_id: Uuid,
     /// The character's name.
     pub name: String,
+}
+
+impl Command for CreateCharacter {
+    fn command_type(&self) -> &'static str {
+        "character.create_character"
+    }
+
+    fn correlation_id(&self) -> Uuid {
+        self.correlation_id
+    }
 }
 
 /// Command to modify a character attribute.
@@ -24,6 +35,16 @@ pub struct ModifyAttribute {
     pub new_value: i32,
 }
 
+impl Command for ModifyAttribute {
+    fn command_type(&self) -> &'static str {
+        "character.modify_attribute"
+    }
+
+    fn correlation_id(&self) -> Uuid {
+        self.correlation_id
+    }
+}
+
 /// Command to award experience to a character.
 #[derive(Debug, Clone)]
 pub struct AwardExperience {
@@ -33,4 +54,14 @@ pub struct AwardExperience {
     pub character_id: Uuid,
     /// The amount of experience to award.
     pub amount: u32,
+}
+
+impl Command for AwardExperience {
+    fn command_type(&self) -> &'static str {
+        "character.award_experience"
+    }
+
+    fn correlation_id(&self) -> Uuid {
+        self.correlation_id
+    }
 }
