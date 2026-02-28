@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  rust-tests:
+    name: Rust Tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: otherworlds
+          POSTGRES_PASSWORD: otherworlds
+          POSTGRES_DB: otherworlds
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U otherworlds"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgres://otherworlds:otherworlds@localhost:5432/otherworlds
+      SQLX_OFFLINE: false
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+
+      - name: Check formatting
+        run: cargo fmt -- --check
+
+      - name: Clippy lint
+        run: cargo clippy --all-targets
+
+      - name: Run tests
+        run: cargo test
