@@ -151,10 +151,16 @@ mod tests {
     use otherworlds_core::error::DomainError;
     use otherworlds_core::repository::{EventRepository, StoredEvent};
     use otherworlds_core::rng::DeterministicRng;
+    use otherworlds_inventory::domain::events::{InventoryEventKind, ItemAdded};
     use serde_json::Value;
     use sqlx::PgPool;
     use std::sync::{Arc, Mutex};
     use tower::ServiceExt;
+
+    /// Well-known item ID used by `MockEventRepository` so that success tests
+    /// for remove-item and equip-item can reference an item that actually
+    /// exists in the reconstituted inventory.
+    const KNOWN_ITEM_ID: Uuid = Uuid::from_u128(0xAAAA_BBBB_CCCC_DDDD_EEEE_FFFF_0000_1111);
 
     #[derive(Debug)]
     struct FixedClock(DateTime<Utc>);
@@ -178,22 +184,30 @@ mod tests {
         }
     }
 
+    /// Mock repository that returns a single `ItemAdded` event with a valid
+    /// serialized payload. Uses the caller-supplied `aggregate_id` and the
+    /// well-known `KNOWN_ITEM_ID` so that the reconstituted inventory contains
+    /// that item.
     #[derive(Debug)]
     struct MockEventRepository;
 
     #[async_trait::async_trait]
     impl EventRepository for MockEventRepository {
-        async fn load_events(&self, _aggregate_id: Uuid) -> Result<Vec<StoredEvent>, DomainError> {
-            // Return a dummy event so existence checks pass.
+        async fn load_events(&self, aggregate_id: Uuid) -> Result<Vec<StoredEvent>, DomainError> {
+            let fixed_now = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
             Ok(vec![StoredEvent {
                 event_id: Uuid::new_v4(),
-                aggregate_id: Uuid::new_v4(),
+                aggregate_id,
                 event_type: "inventory.item_added".to_owned(),
-                payload: serde_json::json!({}),
+                payload: serde_json::to_value(InventoryEventKind::ItemAdded(ItemAdded {
+                    inventory_id: aggregate_id,
+                    item_id: KNOWN_ITEM_ID,
+                }))
+                .expect("ItemAdded serialization is infallible"),
                 sequence_number: 1,
                 correlation_id: Uuid::new_v4(),
                 causation_id: Uuid::new_v4(),
-                occurred_at: Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
+                occurred_at: fixed_now,
             }])
         }
 
@@ -307,13 +321,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_remove_item_returns_200_with_event_ids() {
-        // Arrange
+        // Arrange — use KNOWN_ITEM_ID so the item exists in the reconstituted
+        // inventory after the mock's ItemAdded event is applied.
         let app = router().with_state(test_app_state());
         let inventory_id = Uuid::new_v4();
-        let item_id = Uuid::new_v4();
         let body = serde_json::json!({
             "inventory_id": inventory_id,
-            "item_id": item_id
+            "item_id": KNOWN_ITEM_ID
         });
 
         let request = Request::builder()
@@ -346,13 +360,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_equip_item_returns_200_with_event_ids() {
-        // Arrange
+        // Arrange — use KNOWN_ITEM_ID so the item exists in the reconstituted
+        // inventory after the mock's ItemAdded event is applied.
         let app = router().with_state(test_app_state());
         let inventory_id = Uuid::new_v4();
-        let item_id = Uuid::new_v4();
         let body = serde_json::json!({
             "inventory_id": inventory_id,
-            "item_id": item_id
+            "item_id": KNOWN_ITEM_ID
         });
 
         let request = Request::builder()
@@ -528,5 +542,38 @@ mod tests {
         let json: Value = serde_json::from_slice(&body_bytes).unwrap();
 
         assert_eq!(json["error"], "aggregate_not_found");
+    }
+
+    #[tokio::test]
+    async fn test_remove_item_returns_400_when_item_not_in_inventory() {
+        // Arrange — inventory exists (mock returns an ItemAdded for KNOWN_ITEM_ID)
+        // but we request removal of a different item.
+        let app = router().with_state(test_app_state());
+        let inventory_id = Uuid::new_v4();
+        let unknown_item_id = Uuid::new_v4();
+        let body = serde_json::json!({
+            "inventory_id": inventory_id,
+            "item_id": unknown_item_id
+        });
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/remove-item")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        assert_eq!(json["error"], "validation_error");
     }
 }

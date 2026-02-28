@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::domain::aggregates::Inventory;
 use crate::domain::commands::{AddItem, EquipItem, RemoveItem};
-use crate::domain::events::InventoryEvent;
+use crate::domain::events::{InventoryEvent, InventoryEventKind};
 
 /// Result of a successfully handled command.
 #[derive(Debug)]
@@ -38,15 +38,35 @@ fn to_stored_event(event: &InventoryEvent) -> StoredEvent {
 }
 
 /// Reconstitutes an `Inventory` from stored events.
-fn reconstitute(inventory_id: Uuid, existing_events: &[StoredEvent]) -> Inventory {
+///
+/// # Errors
+///
+/// Returns `DomainError::Infrastructure` if event deserialization fails.
+fn reconstitute(
+    inventory_id: Uuid,
+    existing_events: &[StoredEvent],
+) -> Result<Inventory, DomainError> {
     let mut inventory = Inventory::new(inventory_id);
-    // TODO: Deserialize each StoredEvent back to InventoryEvent and call
-    // inventory.apply(&event) to rebuild full aggregate state. Currently only
-    // the version counter is reconstructed.
-    for _event in existing_events {
-        inventory.version += 1;
+    for stored in existing_events {
+        let kind: InventoryEventKind =
+            serde_json::from_value(stored.payload.clone()).map_err(|e| {
+                DomainError::Infrastructure(format!("event deserialization failed: {e}"))
+            })?;
+        let event = InventoryEvent {
+            metadata: otherworlds_core::event::EventMetadata {
+                event_id: stored.event_id,
+                event_type: stored.event_type.clone(),
+                aggregate_id: stored.aggregate_id,
+                sequence_number: stored.sequence_number,
+                correlation_id: stored.correlation_id,
+                causation_id: stored.causation_id,
+                occurred_at: stored.occurred_at,
+            },
+            kind,
+        };
+        inventory.apply(&event);
     }
-    inventory
+    Ok(inventory)
 }
 
 /// Handles the `AddItem` command: loads the aggregate, adds the item, and
@@ -64,7 +84,7 @@ pub async fn handle_add_item(
     if existing_events.is_empty() {
         return Err(DomainError::AggregateNotFound(command.inventory_id));
     }
-    let mut inventory = reconstitute(command.inventory_id, &existing_events);
+    let mut inventory = reconstitute(command.inventory_id, &existing_events)?;
 
     inventory.add_item(command.item_id, command.correlation_id, clock);
 
@@ -74,7 +94,7 @@ pub async fn handle_add_item(
         .map(to_stored_event)
         .collect();
 
-    repo.append_events(command.inventory_id, inventory.version, &stored_events)
+    repo.append_events(command.inventory_id, inventory.version(), &stored_events)
         .await?;
 
     Ok(InventoryCommandResult {
@@ -98,9 +118,9 @@ pub async fn handle_remove_item(
     if existing_events.is_empty() {
         return Err(DomainError::AggregateNotFound(command.inventory_id));
     }
-    let mut inventory = reconstitute(command.inventory_id, &existing_events);
+    let mut inventory = reconstitute(command.inventory_id, &existing_events)?;
 
-    inventory.remove_item(command.item_id, command.correlation_id, clock);
+    inventory.remove_item(command.item_id, command.correlation_id, clock)?;
 
     let stored_events: Vec<StoredEvent> = inventory
         .uncommitted_events()
@@ -108,7 +128,7 @@ pub async fn handle_remove_item(
         .map(to_stored_event)
         .collect();
 
-    repo.append_events(command.inventory_id, inventory.version, &stored_events)
+    repo.append_events(command.inventory_id, inventory.version(), &stored_events)
         .await?;
 
     Ok(InventoryCommandResult {
@@ -132,9 +152,9 @@ pub async fn handle_equip_item(
     if existing_events.is_empty() {
         return Err(DomainError::AggregateNotFound(command.inventory_id));
     }
-    let mut inventory = reconstitute(command.inventory_id, &existing_events);
+    let mut inventory = reconstitute(command.inventory_id, &existing_events)?;
 
-    inventory.equip_item(command.item_id, command.correlation_id, clock);
+    inventory.equip_item(command.item_id, command.correlation_id, clock)?;
 
     let stored_events: Vec<StoredEvent> = inventory
         .uncommitted_events()
@@ -142,7 +162,7 @@ pub async fn handle_equip_item(
         .map(to_stored_event)
         .collect();
 
-    repo.append_events(command.inventory_id, inventory.version, &stored_events)
+    repo.append_events(command.inventory_id, inventory.version(), &stored_events)
         .await?;
 
     Ok(InventoryCommandResult {
@@ -164,6 +184,7 @@ mod tests {
         handle_add_item, handle_equip_item, handle_remove_item,
     };
     use crate::domain::commands::{AddItem, EquipItem, RemoveItem};
+    use crate::domain::events::{InventoryEventKind, ItemAdded};
 
     #[derive(Debug)]
     struct FixedClock(DateTime<Utc>);
@@ -217,12 +238,20 @@ mod tests {
         }
     }
 
-    fn dummy_stored_event(aggregate_id: Uuid, fixed_now: DateTime<Utc>) -> StoredEvent {
+    fn dummy_stored_event(
+        aggregate_id: Uuid,
+        item_id: Uuid,
+        fixed_now: DateTime<Utc>,
+    ) -> StoredEvent {
         StoredEvent {
             event_id: Uuid::new_v4(),
             aggregate_id,
             event_type: "inventory.item_added".to_owned(),
-            payload: serde_json::json!({}),
+            payload: serde_json::to_value(InventoryEventKind::ItemAdded(ItemAdded {
+                inventory_id: aggregate_id,
+                item_id,
+            }))
+            .unwrap(),
             sequence_number: 1,
             correlation_id: Uuid::new_v4(),
             causation_id: Uuid::new_v4(),
@@ -234,11 +263,12 @@ mod tests {
     async fn test_handle_add_item_persists_item_added_event() {
         // Arrange
         let inventory_id = Uuid::new_v4();
+        let existing_item_id = Uuid::new_v4();
         let item_id = Uuid::new_v4();
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
-        let existing_event = dummy_stored_event(inventory_id, fixed_now);
+        let existing_event = dummy_stored_event(inventory_id, existing_item_id, fixed_now);
         let repo = MockEventRepository::new(Ok(vec![existing_event]));
 
         let command = AddItem {
@@ -270,17 +300,26 @@ mod tests {
         assert_eq!(stored.correlation_id, correlation_id);
         assert_eq!(stored.causation_id, correlation_id);
         assert_eq!(stored.occurred_at, fixed_now);
+
+        let payload: InventoryEventKind = serde_json::from_value(stored.payload.clone()).unwrap();
+        match payload {
+            InventoryEventKind::ItemAdded(added) => {
+                assert_eq!(added.inventory_id, inventory_id);
+                assert_eq!(added.item_id, item_id);
+            }
+            other => panic!("expected ItemAdded payload, got {other:?}"),
+        }
     }
 
     #[tokio::test]
     async fn test_handle_remove_item_persists_item_removed_event() {
-        // Arrange
+        // Arrange — the existing event must add the item we intend to remove.
         let inventory_id = Uuid::new_v4();
         let item_id = Uuid::new_v4();
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
-        let existing_event = dummy_stored_event(inventory_id, fixed_now);
+        let existing_event = dummy_stored_event(inventory_id, item_id, fixed_now);
         let repo = MockEventRepository::new(Ok(vec![existing_event]));
 
         let command = RemoveItem {
@@ -312,17 +351,26 @@ mod tests {
         assert_eq!(stored.correlation_id, correlation_id);
         assert_eq!(stored.causation_id, correlation_id);
         assert_eq!(stored.occurred_at, fixed_now);
+
+        let payload: InventoryEventKind = serde_json::from_value(stored.payload.clone()).unwrap();
+        match payload {
+            InventoryEventKind::ItemRemoved(removed) => {
+                assert_eq!(removed.inventory_id, inventory_id);
+                assert_eq!(removed.item_id, item_id);
+            }
+            other => panic!("expected ItemRemoved payload, got {other:?}"),
+        }
     }
 
     #[tokio::test]
     async fn test_handle_equip_item_persists_item_equipped_event() {
-        // Arrange
+        // Arrange — the existing event must add the item we intend to equip.
         let inventory_id = Uuid::new_v4();
         let item_id = Uuid::new_v4();
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
-        let existing_event = dummy_stored_event(inventory_id, fixed_now);
+        let existing_event = dummy_stored_event(inventory_id, item_id, fixed_now);
         let repo = MockEventRepository::new(Ok(vec![existing_event]));
 
         let command = EquipItem {
@@ -354,6 +402,15 @@ mod tests {
         assert_eq!(stored.correlation_id, correlation_id);
         assert_eq!(stored.causation_id, correlation_id);
         assert_eq!(stored.occurred_at, fixed_now);
+
+        let payload: InventoryEventKind = serde_json::from_value(stored.payload.clone()).unwrap();
+        match payload {
+            InventoryEventKind::ItemEquipped(equipped) => {
+                assert_eq!(equipped.inventory_id, inventory_id);
+                assert_eq!(equipped.item_id, item_id);
+            }
+            other => panic!("expected ItemEquipped payload, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -407,6 +464,68 @@ mod tests {
         match result.unwrap_err() {
             DomainError::AggregateNotFound(id) => assert_eq!(id, inventory_id),
             other => panic!("expected AggregateNotFound, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_remove_item_returns_error_when_item_not_in_inventory() {
+        // Arrange — inventory exists but does not contain the item being removed.
+        let inventory_id = Uuid::new_v4();
+        let existing_item_id = Uuid::new_v4();
+        let missing_item_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let existing_event = dummy_stored_event(inventory_id, existing_item_id, fixed_now);
+        let repo = MockEventRepository::new(Ok(vec![existing_event]));
+
+        let command = RemoveItem {
+            correlation_id,
+            inventory_id,
+            item_id: missing_item_id,
+        };
+
+        // Act
+        let result = handle_remove_item(&command, &clock, &repo).await;
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::Validation(msg) => {
+                assert!(msg.contains(&missing_item_id.to_string()));
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_equip_item_returns_error_when_item_not_in_inventory() {
+        // Arrange — inventory exists but does not contain the item being equipped.
+        let inventory_id = Uuid::new_v4();
+        let existing_item_id = Uuid::new_v4();
+        let missing_item_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let existing_event = dummy_stored_event(inventory_id, existing_item_id, fixed_now);
+        let repo = MockEventRepository::new(Ok(vec![existing_event]));
+
+        let command = EquipItem {
+            correlation_id,
+            inventory_id,
+            item_id: missing_item_id,
+        };
+
+        // Act
+        let result = handle_equip_item(&command, &clock, &repo).await;
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::Validation(msg) => {
+                assert!(msg.contains(&missing_item_id.to_string()));
+            }
+            other => panic!("expected Validation, got {other:?}"),
         }
     }
 }
