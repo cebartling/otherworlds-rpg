@@ -61,6 +61,8 @@ impl NarrativeSession {
 
     /// Presents a choice to the player, producing a `ChoicePresented` event.
     pub fn present_choice(&mut self, correlation_id: Uuid, clock: &dyn Clock) {
+        // TODO: event_id and choice_id use Uuid::new_v4() which breaks replay determinism.
+        // See TODO on `advance_beat()` for details.
         let event = NarrativeEvent {
             metadata: EventMetadata {
                 event_id: Uuid::new_v4(),

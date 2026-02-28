@@ -218,9 +218,10 @@ mod tests {
         let clock = FixedClock(fixed_now);
         let repo = MockEventRepository::new(Ok(Vec::new()));
 
+        let character_id = Uuid::new_v4();
         let command = CreateCharacter {
             correlation_id,
-            character_id: Uuid::new_v4(),
+            character_id,
             name: "Alaric".to_owned(),
         };
 
@@ -233,12 +234,14 @@ mod tests {
         let appended = repo.appended_events();
         assert_eq!(appended.len(), 1);
 
-        let (_, expected_version, events) = &appended[0];
+        let (agg_id, expected_version, events) = &appended[0];
+        assert_eq!(*agg_id, character_id);
         assert_eq!(*expected_version, 0);
         assert_eq!(events.len(), 1);
 
         let stored = &events[0];
         assert_eq!(stored.event_type, "character.character_created");
+        assert_eq!(stored.aggregate_id, character_id);
         assert_eq!(stored.sequence_number, 1);
         assert_eq!(stored.correlation_id, correlation_id);
         assert_eq!(stored.causation_id, correlation_id);

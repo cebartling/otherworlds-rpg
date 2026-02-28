@@ -69,6 +69,8 @@ impl Character {
         correlation_id: Uuid,
         clock: &dyn Clock,
     ) {
+        // TODO: event_id uses Uuid::new_v4() which breaks replay determinism.
+        // See TODO on `create()` for details.
         let event = CharacterEvent {
             metadata: EventMetadata {
                 event_id: Uuid::new_v4(),
@@ -91,6 +93,8 @@ impl Character {
 
     /// Awards experience to a character, producing an `ExperienceGained` event.
     pub fn award_experience(&mut self, amount: u32, correlation_id: Uuid, clock: &dyn Clock) {
+        // TODO: event_id uses Uuid::new_v4() which breaks replay determinism.
+        // See TODO on `create()` for details.
         let event = CharacterEvent {
             metadata: EventMetadata {
                 event_id: Uuid::new_v4(),
