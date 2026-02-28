@@ -55,7 +55,7 @@ Ten crates under `backend/crates/`, one binary (`otherworlds-api`), nine librari
 
 - **`otherworlds-core`** — Shared trait abstractions only: `DomainEvent`, `Command`, `AggregateRoot`, `EventRepository`, `Clock`, `DeterministicRng`, `DomainError`. Every other crate depends on this and nothing else.
 - **`otherworlds-api`** — Composition root. The only crate that depends on all others. Builds the Axum router, creates `AppState` with `PgPool`, applies middleware (TraceLayer, CorsLayer), starts the server.
-- **`otherworlds-event-store`** — PostgreSQL event persistence (currently `todo!()` stubs).
+- **`otherworlds-event-store`** — PostgreSQL event persistence (`PgEventRepository`).
 - **Six domain crates** — `narrative`, `rules`, `world-state`, `character`, `inventory`, `session`, `content`. Each represents a bounded context.
 
 ### Critical Dependency Rule
