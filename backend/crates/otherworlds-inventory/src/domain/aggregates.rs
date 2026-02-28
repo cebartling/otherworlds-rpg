@@ -45,7 +45,22 @@ impl Inventory {
     }
 
     /// Adds an item to the inventory, producing an `ItemAdded` event.
-    pub fn add_item(&mut self, item_id: Uuid, correlation_id: Uuid, clock: &dyn Clock) {
+    ///
+    /// # Errors
+    ///
+    /// Returns `DomainError::Validation` if the item is already in the inventory.
+    pub fn add_item(
+        &mut self,
+        item_id: Uuid,
+        correlation_id: Uuid,
+        clock: &dyn Clock,
+    ) -> Result<(), DomainError> {
+        if self.items.contains(&item_id) {
+            return Err(DomainError::Validation(format!(
+                "item {item_id} already in inventory {}",
+                self.id
+            )));
+        }
         // TODO: event_id uses Uuid::new_v4() which breaks replay determinism.
         // Requires extending DeterministicRng to support UUID generation and
         // threading &mut dyn DeterministicRng through all domain methods.
@@ -66,6 +81,7 @@ impl Inventory {
         };
 
         self.uncommitted_events.push(event);
+        Ok(())
     }
 
     /// Removes an item from the inventory, producing an `ItemRemoved` event.
@@ -208,7 +224,7 @@ mod tests {
         let mut inventory = Inventory::new(inventory_id);
 
         // Act
-        inventory.add_item(item_id, correlation_id, &clock);
+        inventory.add_item(item_id, correlation_id, &clock).unwrap();
 
         // Assert
         let events = inventory.uncommitted_events();
@@ -234,6 +250,36 @@ mod tests {
     }
 
     #[test]
+    fn test_add_item_returns_error_when_item_already_in_inventory() {
+        // Arrange
+        let inventory_id = Uuid::new_v4();
+        let item_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let mut inventory = Inventory::new(inventory_id);
+
+        // Add the item once.
+        inventory.add_item(item_id, Uuid::new_v4(), &clock).unwrap();
+        for event in inventory.uncommitted_events().to_vec() {
+            inventory.apply(&event);
+        }
+        inventory.clear_uncommitted_events();
+
+        // Act — try to add the same item again.
+        let result = inventory.add_item(item_id, correlation_id, &clock);
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::Validation(msg) => {
+                assert!(msg.contains(&item_id.to_string()));
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_remove_item_produces_item_removed_event() {
         // Arrange
         let inventory_id = Uuid::new_v4();
@@ -244,7 +290,7 @@ mod tests {
         let mut inventory = Inventory::new(inventory_id);
 
         // Add the item first so it can be removed.
-        inventory.add_item(item_id, Uuid::new_v4(), &clock);
+        inventory.add_item(item_id, Uuid::new_v4(), &clock).unwrap();
         for event in inventory.uncommitted_events().to_vec() {
             inventory.apply(&event);
         }
@@ -312,7 +358,7 @@ mod tests {
         let mut inventory = Inventory::new(inventory_id);
 
         // Add the item first so it can be equipped.
-        inventory.add_item(item_id, Uuid::new_v4(), &clock);
+        inventory.add_item(item_id, Uuid::new_v4(), &clock).unwrap();
         for event in inventory.uncommitted_events().to_vec() {
             inventory.apply(&event);
         }

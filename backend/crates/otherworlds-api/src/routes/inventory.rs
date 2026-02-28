@@ -151,7 +151,9 @@ mod tests {
     use otherworlds_core::error::DomainError;
     use otherworlds_core::repository::{EventRepository, StoredEvent};
     use otherworlds_core::rng::DeterministicRng;
-    use otherworlds_inventory::domain::events::{InventoryEventKind, ItemAdded};
+    use otherworlds_inventory::domain::events::{
+        ITEM_ADDED_EVENT_TYPE, InventoryEventKind, ItemAdded,
+    };
     use serde_json::Value;
     use sqlx::PgPool;
     use std::sync::{Arc, Mutex};
@@ -198,7 +200,7 @@ mod tests {
             Ok(vec![StoredEvent {
                 event_id: Uuid::new_v4(),
                 aggregate_id,
-                event_type: "inventory.item_added".to_owned(),
+                event_type: ITEM_ADDED_EVENT_TYPE.to_owned(),
                 payload: serde_json::to_value(InventoryEventKind::ItemAdded(ItemAdded {
                     inventory_id: aggregate_id,
                     item_id: KNOWN_ITEM_ID,

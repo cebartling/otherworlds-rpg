@@ -86,7 +86,7 @@ pub async fn handle_add_item(
     }
     let mut inventory = reconstitute(command.inventory_id, &existing_events)?;
 
-    inventory.add_item(command.item_id, command.correlation_id, clock);
+    inventory.add_item(command.item_id, command.correlation_id, clock)?;
 
     let stored_events: Vec<StoredEvent> = inventory
         .uncommitted_events()
@@ -184,7 +184,10 @@ mod tests {
         handle_add_item, handle_equip_item, handle_remove_item,
     };
     use crate::domain::commands::{AddItem, EquipItem, RemoveItem};
-    use crate::domain::events::{InventoryEventKind, ItemAdded};
+    use crate::domain::events::{
+        ITEM_ADDED_EVENT_TYPE, ITEM_EQUIPPED_EVENT_TYPE, ITEM_REMOVED_EVENT_TYPE,
+        InventoryEventKind, ItemAdded,
+    };
 
     #[derive(Debug)]
     struct FixedClock(DateTime<Utc>);
@@ -246,7 +249,7 @@ mod tests {
         StoredEvent {
             event_id: Uuid::new_v4(),
             aggregate_id,
-            event_type: "inventory.item_added".to_owned(),
+            event_type: ITEM_ADDED_EVENT_TYPE.to_owned(),
             payload: serde_json::to_value(InventoryEventKind::ItemAdded(ItemAdded {
                 inventory_id: aggregate_id,
                 item_id,
@@ -294,7 +297,7 @@ mod tests {
         assert_eq!(events.len(), 1);
 
         let stored = &events[0];
-        assert_eq!(stored.event_type, "inventory.item_added");
+        assert_eq!(stored.event_type, ITEM_ADDED_EVENT_TYPE);
         assert_eq!(stored.aggregate_id, inventory_id);
         assert_eq!(stored.sequence_number, 2);
         assert_eq!(stored.correlation_id, correlation_id);
@@ -345,7 +348,7 @@ mod tests {
         assert_eq!(events.len(), 1);
 
         let stored = &events[0];
-        assert_eq!(stored.event_type, "inventory.item_removed");
+        assert_eq!(stored.event_type, ITEM_REMOVED_EVENT_TYPE);
         assert_eq!(stored.aggregate_id, inventory_id);
         assert_eq!(stored.sequence_number, 2);
         assert_eq!(stored.correlation_id, correlation_id);
@@ -396,7 +399,7 @@ mod tests {
         assert_eq!(events.len(), 1);
 
         let stored = &events[0];
-        assert_eq!(stored.event_type, "inventory.item_equipped");
+        assert_eq!(stored.event_type, ITEM_EQUIPPED_EVENT_TYPE);
         assert_eq!(stored.aggregate_id, inventory_id);
         assert_eq!(stored.sequence_number, 2);
         assert_eq!(stored.correlation_id, correlation_id);
@@ -464,6 +467,36 @@ mod tests {
         match result.unwrap_err() {
             DomainError::AggregateNotFound(id) => assert_eq!(id, inventory_id),
             other => panic!("expected AggregateNotFound, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_add_item_returns_error_when_item_already_in_inventory() {
+        // Arrange — inventory exists and already contains the item being added.
+        let inventory_id = Uuid::new_v4();
+        let item_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let existing_event = dummy_stored_event(inventory_id, item_id, fixed_now);
+        let repo = MockEventRepository::new(Ok(vec![existing_event]));
+
+        let command = AddItem {
+            correlation_id,
+            inventory_id,
+            item_id,
+        };
+
+        // Act
+        let result = handle_add_item(&command, &clock, &repo).await;
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::Validation(msg) => {
+                assert!(msg.contains(&item_id.to_string()));
+            }
+            other => panic!("expected Validation, got {other:?}"),
         }
     }
 
