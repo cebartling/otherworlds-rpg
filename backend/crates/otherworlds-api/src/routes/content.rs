@@ -1,12 +1,583 @@
 //! Routes for the Content Authoring bounded context.
 
-use axum::Router;
+use axum::extract::State;
+use axum::{Json, Router, routing::post};
+use serde::{Deserialize, Serialize};
+use tracing::{info, instrument};
+use uuid::Uuid;
 
+use otherworlds_content::application::command_handlers;
+use otherworlds_content::domain::commands;
+
+use crate::error::ApiError;
 use crate::state::AppState;
 
+/// Request body for POST /ingest-campaign.
+#[derive(Debug, Deserialize)]
+pub struct IngestCampaignRequest {
+    /// The campaign source content.
+    pub source: String,
+}
+
+/// Request body for POST /validate-campaign.
+#[derive(Debug, Deserialize)]
+pub struct ValidateCampaignRequest {
+    /// The campaign identifier.
+    pub campaign_id: Uuid,
+}
+
+/// Request body for POST /compile-campaign.
+#[derive(Debug, Deserialize)]
+pub struct CompileCampaignRequest {
+    /// The campaign identifier.
+    pub campaign_id: Uuid,
+}
+
+/// Response body returned after a command is successfully handled.
+#[derive(Debug, Serialize)]
+pub struct CommandResponse {
+    /// The aggregate ID affected by the command.
+    pub aggregate_id: Uuid,
+    /// IDs of the domain events produced and persisted.
+    pub event_ids: Vec<Uuid>,
+}
+
+/// POST /ingest-campaign
+#[instrument(skip(state, request))]
+async fn ingest_campaign(
+    State(state): State<AppState>,
+    Json(request): Json<IngestCampaignRequest>,
+) -> Result<Json<CommandResponse>, ApiError> {
+    let command = commands::IngestCampaign {
+        correlation_id: Uuid::new_v4(),
+        source: request.source,
+    };
+
+    info!(correlation_id = %command.correlation_id, "handling ingest_campaign command");
+
+    let result = command_handlers::handle_ingest_campaign(
+        &command,
+        state.clock.as_ref(),
+        &*state.event_repository,
+    )
+    .await?;
+
+    let event_ids = result.stored_events.iter().map(|e| e.event_id).collect();
+
+    Ok(Json(CommandResponse {
+        aggregate_id: result.aggregate_id,
+        event_ids,
+    }))
+}
+
+/// POST /validate-campaign
+#[instrument(skip(state, request), fields(campaign_id = %request.campaign_id))]
+async fn validate_campaign(
+    State(state): State<AppState>,
+    Json(request): Json<ValidateCampaignRequest>,
+) -> Result<Json<CommandResponse>, ApiError> {
+    let command = commands::ValidateCampaign {
+        correlation_id: Uuid::new_v4(),
+        campaign_id: request.campaign_id,
+    };
+
+    info!(correlation_id = %command.correlation_id, "handling validate_campaign command");
+
+    let result = command_handlers::handle_validate_campaign(
+        &command,
+        state.clock.as_ref(),
+        &*state.event_repository,
+    )
+    .await?;
+
+    let event_ids = result.stored_events.iter().map(|e| e.event_id).collect();
+
+    Ok(Json(CommandResponse {
+        aggregate_id: result.aggregate_id,
+        event_ids,
+    }))
+}
+
+/// POST /compile-campaign
+#[instrument(skip(state, request), fields(campaign_id = %request.campaign_id))]
+async fn compile_campaign(
+    State(state): State<AppState>,
+    Json(request): Json<CompileCampaignRequest>,
+) -> Result<Json<CommandResponse>, ApiError> {
+    let command = commands::CompileCampaign {
+        correlation_id: Uuid::new_v4(),
+        campaign_id: request.campaign_id,
+    };
+
+    info!(correlation_id = %command.correlation_id, "handling compile_campaign command");
+
+    let result = command_handlers::handle_compile_campaign(
+        &command,
+        state.clock.as_ref(),
+        &*state.event_repository,
+    )
+    .await?;
+
+    let event_ids = result.stored_events.iter().map(|e| e.event_id).collect();
+
+    Ok(Json(CommandResponse {
+        aggregate_id: result.aggregate_id,
+        event_ids,
+    }))
+}
+
 /// Returns the router for the content context.
-///
-/// Routes will be added as command and query endpoints are implemented.
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route("/ingest-campaign", post(ingest_campaign))
+        .route("/validate-campaign", post(validate_campaign))
+        .route("/compile-campaign", post(compile_campaign))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use chrono::{DateTime, TimeZone, Utc};
+    use otherworlds_content::domain::events::{
+        CAMPAIGN_INGESTED_EVENT_TYPE, CAMPAIGN_VALIDATED_EVENT_TYPE, CampaignIngested,
+        CampaignValidated, ContentEventKind,
+    };
+    use otherworlds_core::clock::Clock;
+    use otherworlds_core::error::DomainError;
+    use otherworlds_core::repository::{EventRepository, StoredEvent};
+    use otherworlds_core::rng::DeterministicRng;
+    use serde_json::Value;
+    use sqlx::PgPool;
+    use std::sync::{Arc, Mutex};
+    use tower::ServiceExt;
+
+    /// Well-known version hash used by mock repositories.
+    const KNOWN_VERSION_HASH: &str = "abc123";
+
+    #[derive(Debug)]
+    struct FixedClock(DateTime<Utc>);
+
+    impl Clock for FixedClock {
+        fn now(&self) -> DateTime<Utc> {
+            self.0
+        }
+    }
+
+    #[derive(Debug)]
+    struct MockRng;
+
+    impl DeterministicRng for MockRng {
+        fn next_u32_range(&mut self, min: u32, _max: u32) -> u32 {
+            min
+        }
+
+        fn next_f64(&mut self) -> f64 {
+            0.0
+        }
+    }
+
+    /// Mock repository that returns `[CampaignIngested, CampaignValidated]`
+    /// events so the reconstituted campaign is in a validated state.
+    #[derive(Debug)]
+    struct MockEventRepository;
+
+    #[async_trait::async_trait]
+    impl EventRepository for MockEventRepository {
+        async fn load_events(&self, aggregate_id: Uuid) -> Result<Vec<StoredEvent>, DomainError> {
+            let fixed_now = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+            Ok(vec![
+                StoredEvent {
+                    event_id: Uuid::new_v4(),
+                    aggregate_id,
+                    event_type: CAMPAIGN_INGESTED_EVENT_TYPE.to_owned(),
+                    payload: serde_json::to_value(ContentEventKind::CampaignIngested(
+                        CampaignIngested {
+                            campaign_id: aggregate_id,
+                            version_hash: KNOWN_VERSION_HASH.to_owned(),
+                        },
+                    ))
+                    .expect("CampaignIngested serialization is infallible"),
+                    sequence_number: 1,
+                    correlation_id: Uuid::new_v4(),
+                    causation_id: Uuid::new_v4(),
+                    occurred_at: fixed_now,
+                },
+                StoredEvent {
+                    event_id: Uuid::new_v4(),
+                    aggregate_id,
+                    event_type: CAMPAIGN_VALIDATED_EVENT_TYPE.to_owned(),
+                    payload: serde_json::to_value(ContentEventKind::CampaignValidated(
+                        CampaignValidated {
+                            campaign_id: aggregate_id,
+                        },
+                    ))
+                    .expect("CampaignValidated serialization is infallible"),
+                    sequence_number: 2,
+                    correlation_id: Uuid::new_v4(),
+                    causation_id: Uuid::new_v4(),
+                    occurred_at: fixed_now,
+                },
+            ])
+        }
+
+        async fn append_events(
+            &self,
+            _aggregate_id: Uuid,
+            _expected_version: i64,
+            _events: &[StoredEvent],
+        ) -> Result<(), DomainError> {
+            Ok(())
+        }
+    }
+
+    /// Mock repository that returns only `[CampaignIngested]` — campaign is
+    /// ingested but not validated (for compile 400 test).
+    #[derive(Debug)]
+    struct IngestedOnlyMockEventRepository;
+
+    #[async_trait::async_trait]
+    impl EventRepository for IngestedOnlyMockEventRepository {
+        async fn load_events(&self, aggregate_id: Uuid) -> Result<Vec<StoredEvent>, DomainError> {
+            let fixed_now = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+            Ok(vec![StoredEvent {
+                event_id: Uuid::new_v4(),
+                aggregate_id,
+                event_type: CAMPAIGN_INGESTED_EVENT_TYPE.to_owned(),
+                payload: serde_json::to_value(ContentEventKind::CampaignIngested(
+                    CampaignIngested {
+                        campaign_id: aggregate_id,
+                        version_hash: KNOWN_VERSION_HASH.to_owned(),
+                    },
+                ))
+                .expect("CampaignIngested serialization is infallible"),
+                sequence_number: 1,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            }])
+        }
+
+        async fn append_events(
+            &self,
+            _aggregate_id: Uuid,
+            _expected_version: i64,
+            _events: &[StoredEvent],
+        ) -> Result<(), DomainError> {
+            Ok(())
+        }
+    }
+
+    #[derive(Debug)]
+    struct EmptyEventRepository;
+
+    #[async_trait::async_trait]
+    impl EventRepository for EmptyEventRepository {
+        async fn load_events(&self, _aggregate_id: Uuid) -> Result<Vec<StoredEvent>, DomainError> {
+            Ok(vec![])
+        }
+
+        async fn append_events(
+            &self,
+            _aggregate_id: Uuid,
+            _expected_version: i64,
+            _events: &[StoredEvent],
+        ) -> Result<(), DomainError> {
+            Ok(())
+        }
+    }
+
+    #[derive(Debug)]
+    struct FailingEventRepository;
+
+    #[async_trait::async_trait]
+    impl EventRepository for FailingEventRepository {
+        async fn load_events(&self, _aggregate_id: Uuid) -> Result<Vec<StoredEvent>, DomainError> {
+            Err(DomainError::Infrastructure("connection refused".into()))
+        }
+
+        async fn append_events(
+            &self,
+            _aggregate_id: Uuid,
+            _expected_version: i64,
+            _events: &[StoredEvent],
+        ) -> Result<(), DomainError> {
+            Err(DomainError::Infrastructure("connection refused".into()))
+        }
+    }
+
+    fn app_state_with(event_repository: Arc<dyn EventRepository>) -> AppState {
+        let pool = PgPool::connect_lazy("postgres://localhost/test").unwrap();
+        let clock: Arc<dyn Clock + Send + Sync> = Arc::new(FixedClock(
+            Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
+        ));
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
+        AppState::new(pool, clock, rng, event_repository)
+    }
+
+    fn test_app_state() -> AppState {
+        app_state_with(Arc::new(MockEventRepository))
+    }
+
+    fn ingested_only_app_state() -> AppState {
+        app_state_with(Arc::new(IngestedOnlyMockEventRepository))
+    }
+
+    fn empty_app_state() -> AppState {
+        app_state_with(Arc::new(EmptyEventRepository))
+    }
+
+    fn failing_app_state() -> AppState {
+        app_state_with(Arc::new(FailingEventRepository))
+    }
+
+    #[tokio::test]
+    async fn test_ingest_campaign_returns_200_with_event_ids() {
+        // Arrange
+        let app = router().with_state(test_app_state());
+        let body = serde_json::json!({
+            "source": "# My Campaign\n\nContent here."
+        });
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/ingest-campaign")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        Uuid::parse_str(json["aggregate_id"].as_str().unwrap()).unwrap();
+
+        let event_ids = json["event_ids"].as_array().unwrap();
+        assert_eq!(event_ids.len(), 1);
+        for id in event_ids {
+            Uuid::parse_str(id.as_str().unwrap()).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn test_validate_campaign_returns_200_with_event_ids() {
+        // Arrange
+        let app = router().with_state(test_app_state());
+        let campaign_id = Uuid::new_v4();
+        let body = serde_json::json!({
+            "campaign_id": campaign_id
+        });
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/validate-campaign")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        let returned_id = Uuid::parse_str(json["aggregate_id"].as_str().unwrap()).unwrap();
+        assert_eq!(returned_id, campaign_id);
+
+        let event_ids = json["event_ids"].as_array().unwrap();
+        assert_eq!(event_ids.len(), 1);
+        for id in event_ids {
+            Uuid::parse_str(id.as_str().unwrap()).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn test_compile_campaign_returns_200_with_event_ids() {
+        // Arrange
+        let app = router().with_state(test_app_state());
+        let campaign_id = Uuid::new_v4();
+        let body = serde_json::json!({
+            "campaign_id": campaign_id
+        });
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/compile-campaign")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        let returned_id = Uuid::parse_str(json["aggregate_id"].as_str().unwrap()).unwrap();
+        assert_eq!(returned_id, campaign_id);
+
+        let event_ids = json["event_ids"].as_array().unwrap();
+        assert_eq!(event_ids.len(), 1);
+        for id in event_ids {
+            Uuid::parse_str(id.as_str().unwrap()).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn test_ingest_campaign_returns_422_for_missing_body() {
+        // Arrange
+        let app = router().with_state(test_app_state());
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/ingest-campaign")
+            .header("content-type", "application/json")
+            .body(Body::from("{}"))
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert — Axum returns 422 for deserialization failures.
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn test_validate_campaign_returns_404_when_campaign_not_found() {
+        // Arrange
+        let app = router().with_state(empty_app_state());
+        let campaign_id = Uuid::new_v4();
+        let body = serde_json::json!({
+            "campaign_id": campaign_id
+        });
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/validate-campaign")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        assert_eq!(json["error"], "aggregate_not_found");
+    }
+
+    #[tokio::test]
+    async fn test_compile_campaign_returns_404_when_campaign_not_found() {
+        // Arrange
+        let app = router().with_state(empty_app_state());
+        let campaign_id = Uuid::new_v4();
+        let body = serde_json::json!({
+            "campaign_id": campaign_id
+        });
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/compile-campaign")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        assert_eq!(json["error"], "aggregate_not_found");
+    }
+
+    #[tokio::test]
+    async fn test_validate_campaign_returns_500_when_repository_fails() {
+        // Arrange
+        let app = router().with_state(failing_app_state());
+        let campaign_id = Uuid::new_v4();
+        let body = serde_json::json!({
+            "campaign_id": campaign_id
+        });
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/validate-campaign")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        assert_eq!(json["error"], "infrastructure_error");
+    }
+
+    #[tokio::test]
+    async fn test_compile_campaign_returns_400_when_not_validated() {
+        // Arrange — campaign is ingested but not validated.
+        let app = router().with_state(ingested_only_app_state());
+        let campaign_id = Uuid::new_v4();
+        let body = serde_json::json!({
+            "campaign_id": campaign_id
+        });
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/compile-campaign")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        assert_eq!(json["error"], "validation_error");
+    }
 }

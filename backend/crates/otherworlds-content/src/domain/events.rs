@@ -29,6 +29,15 @@ pub struct CampaignCompiled {
     pub version_hash: String,
 }
 
+/// Event type identifier for [`CampaignIngested`].
+pub const CAMPAIGN_INGESTED_EVENT_TYPE: &str = "content.campaign_ingested";
+
+/// Event type identifier for [`CampaignValidated`].
+pub const CAMPAIGN_VALIDATED_EVENT_TYPE: &str = "content.campaign_validated";
+
+/// Event type identifier for [`CampaignCompiled`].
+pub const CAMPAIGN_COMPILED_EVENT_TYPE: &str = "content.campaign_compiled";
+
 /// Event payload variants for the Content Authoring context.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ContentEventKind {
@@ -52,9 +61,9 @@ pub struct ContentEvent {
 impl DomainEvent for ContentEvent {
     fn event_type(&self) -> &'static str {
         match &self.kind {
-            ContentEventKind::CampaignIngested(_) => "content.campaign_ingested",
-            ContentEventKind::CampaignValidated(_) => "content.campaign_validated",
-            ContentEventKind::CampaignCompiled(_) => "content.campaign_compiled",
+            ContentEventKind::CampaignIngested(_) => CAMPAIGN_INGESTED_EVENT_TYPE,
+            ContentEventKind::CampaignValidated(_) => CAMPAIGN_VALIDATED_EVENT_TYPE,
+            ContentEventKind::CampaignCompiled(_) => CAMPAIGN_COMPILED_EVENT_TYPE,
         }
     }
 
