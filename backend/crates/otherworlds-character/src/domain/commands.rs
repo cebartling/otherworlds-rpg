@@ -8,6 +8,8 @@ use uuid::Uuid;
 pub struct CreateCharacter {
     /// The correlation ID for tracing.
     pub correlation_id: Uuid,
+    /// The character identifier (generated at the API boundary).
+    pub character_id: Uuid,
     /// The character's name.
     pub name: String,
 }

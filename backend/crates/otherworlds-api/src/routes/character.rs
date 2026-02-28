@@ -54,6 +54,7 @@ async fn create_character(
 ) -> Result<Json<CommandResponse>, ApiError> {
     let command = commands::CreateCharacter {
         correlation_id: Uuid::new_v4(),
+        character_id: Uuid::new_v4(),
         name: request.name,
     };
 
@@ -432,5 +433,95 @@ mod tests {
         let json: Value = serde_json::from_slice(&body_bytes).unwrap();
 
         assert_eq!(json["error"], "infrastructure_error");
+    }
+
+    #[tokio::test]
+    async fn test_create_character_returns_400_for_empty_name() {
+        // Arrange
+        let app = router().with_state(test_app_state());
+        let body = serde_json::json!({ "name": "  " });
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/create")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        assert_eq!(json["error"], "validation_error");
+    }
+
+    #[tokio::test]
+    async fn test_modify_attribute_returns_400_for_empty_attribute() {
+        // Arrange
+        let app = router().with_state(test_app_state());
+        let character_id = Uuid::new_v4();
+        let body = serde_json::json!({
+            "character_id": character_id,
+            "attribute": "",
+            "new_value": 18
+        });
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/modify-attribute")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        assert_eq!(json["error"], "validation_error");
+    }
+
+    #[tokio::test]
+    async fn test_award_experience_returns_400_for_zero_amount() {
+        // Arrange
+        let app = router().with_state(test_app_state());
+        let character_id = Uuid::new_v4();
+        let body = serde_json::json!({
+            "character_id": character_id,
+            "amount": 0
+        });
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/award-experience")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        assert_eq!(json["error"], "validation_error");
     }
 }

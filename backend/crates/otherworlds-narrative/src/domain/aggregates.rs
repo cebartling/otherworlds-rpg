@@ -37,6 +37,9 @@ impl NarrativeSession {
 
     /// Advances the narrative to the next beat, producing a `BeatAdvanced` event.
     pub fn advance_beat(&mut self, correlation_id: Uuid, clock: &dyn Clock) {
+        // TODO: event_id and beat_id use Uuid::new_v4() which breaks replay determinism.
+        // Requires extending DeterministicRng to support UUID generation and
+        // threading &mut dyn DeterministicRng through all domain methods.
         let event = NarrativeEvent {
             metadata: EventMetadata {
                 event_id: Uuid::new_v4(),

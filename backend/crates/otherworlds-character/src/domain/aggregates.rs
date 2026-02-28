@@ -39,6 +39,9 @@ impl Character {
 
     /// Creates a character, producing a `CharacterCreated` event.
     pub fn create(&mut self, name: String, correlation_id: Uuid, clock: &dyn Clock) {
+        // TODO: event_id uses Uuid::new_v4() which breaks replay determinism.
+        // Requires extending DeterministicRng to support UUID generation and
+        // threading &mut dyn DeterministicRng through all domain methods.
         let event = CharacterEvent {
             metadata: EventMetadata {
                 event_id: Uuid::new_v4(),

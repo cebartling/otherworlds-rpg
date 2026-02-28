@@ -48,7 +48,13 @@ pub async fn handle_create_character(
     clock: &dyn Clock,
     repo: &dyn EventRepository,
 ) -> Result<Vec<StoredEvent>, DomainError> {
-    let character_id = Uuid::new_v4();
+    if command.name.trim().is_empty() {
+        return Err(DomainError::Validation(
+            "character name must not be empty".into(),
+        ));
+    }
+
+    let character_id = command.character_id;
     let mut character = Character::new(character_id);
 
     character.create(command.name.clone(), command.correlation_id, clock);
@@ -76,6 +82,12 @@ pub async fn handle_modify_attribute(
     clock: &dyn Clock,
     repo: &dyn EventRepository,
 ) -> Result<Vec<StoredEvent>, DomainError> {
+    if command.attribute.trim().is_empty() {
+        return Err(DomainError::Validation(
+            "attribute name must not be empty".into(),
+        ));
+    }
+
     let existing_events = repo.load_events(command.character_id).await?;
     let mut character = reconstitute(command.character_id, &existing_events);
 
@@ -109,6 +121,12 @@ pub async fn handle_award_experience(
     clock: &dyn Clock,
     repo: &dyn EventRepository,
 ) -> Result<Vec<StoredEvent>, DomainError> {
+    if command.amount == 0 {
+        return Err(DomainError::Validation(
+            "experience amount must be greater than zero".into(),
+        ));
+    }
+
     let existing_events = repo.load_events(command.character_id).await?;
     let mut character = reconstitute(command.character_id, &existing_events);
 
@@ -202,6 +220,7 @@ mod tests {
 
         let command = CreateCharacter {
             correlation_id,
+            character_id: Uuid::new_v4(),
             name: "Alaric".to_owned(),
         };
 
@@ -301,5 +320,81 @@ mod tests {
         assert_eq!(stored.correlation_id, correlation_id);
         assert_eq!(stored.causation_id, correlation_id);
         assert_eq!(stored.occurred_at, fixed_now);
+    }
+
+    #[tokio::test]
+    async fn test_handle_create_character_rejects_empty_name() {
+        // Arrange
+        let clock = FixedClock(Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap());
+        let repo = MockEventRepository::new(Ok(Vec::new()));
+
+        let command = CreateCharacter {
+            correlation_id: Uuid::new_v4(),
+            character_id: Uuid::new_v4(),
+            name: "  ".to_owned(),
+        };
+
+        // Act
+        let result = handle_create_character(&command, &clock, &repo).await;
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::Validation(msg) => {
+                assert_eq!(msg, "character name must not be empty");
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_modify_attribute_rejects_empty_attribute() {
+        // Arrange
+        let clock = FixedClock(Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap());
+        let repo = MockEventRepository::new(Ok(Vec::new()));
+
+        let command = ModifyAttribute {
+            correlation_id: Uuid::new_v4(),
+            character_id: Uuid::new_v4(),
+            attribute: String::new(),
+            new_value: 18,
+        };
+
+        // Act
+        let result = handle_modify_attribute(&command, &clock, &repo).await;
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::Validation(msg) => {
+                assert_eq!(msg, "attribute name must not be empty");
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_award_experience_rejects_zero_amount() {
+        // Arrange
+        let clock = FixedClock(Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap());
+        let repo = MockEventRepository::new(Ok(Vec::new()));
+
+        let command = AwardExperience {
+            correlation_id: Uuid::new_v4(),
+            character_id: Uuid::new_v4(),
+            amount: 0,
+        };
+
+        // Act
+        let result = handle_award_experience(&command, &clock, &repo).await;
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::Validation(msg) => {
+                assert_eq!(msg, "experience amount must be greater than zero");
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
     }
 }
