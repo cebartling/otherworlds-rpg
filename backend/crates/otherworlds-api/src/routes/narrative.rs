@@ -140,11 +140,38 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct FailingEventRepository;
+
+    #[async_trait::async_trait]
+    impl EventRepository for FailingEventRepository {
+        async fn load_events(&self, _aggregate_id: Uuid) -> Result<Vec<StoredEvent>, DomainError> {
+            Err(DomainError::Infrastructure("connection refused".into()))
+        }
+
+        async fn append_events(
+            &self,
+            _aggregate_id: Uuid,
+            _expected_version: i64,
+            _events: &[StoredEvent],
+        ) -> Result<(), DomainError> {
+            Err(DomainError::Infrastructure("connection refused".into()))
+        }
+    }
+
     fn test_app_state() -> AppState {
         let pool = PgPool::connect_lazy("postgres://localhost/test").unwrap();
         let clock: Arc<dyn Clock + Send + Sync> = Arc::new(FixedClock(Utc::now()));
         let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let event_repository: Arc<dyn EventRepository> = Arc::new(MockEventRepository);
+        AppState::new(pool, clock, rng, event_repository)
+    }
+
+    fn failing_app_state() -> AppState {
+        let pool = PgPool::connect_lazy("postgres://localhost/test").unwrap();
+        let clock: Arc<dyn Clock + Send + Sync> = Arc::new(FixedClock(Utc::now()));
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
+        let event_repository: Arc<dyn EventRepository> = Arc::new(FailingEventRepository);
         AppState::new(pool, clock, rng, event_repository)
     }
 
@@ -230,5 +257,61 @@ mod tests {
 
         // Assert — Axum returns 422 for deserialization failures.
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn test_advance_beat_returns_500_when_repository_fails() {
+        // Arrange
+        let app = router().with_state(failing_app_state());
+        let session_id = Uuid::new_v4();
+        let body = serde_json::json!({ "session_id": session_id });
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/advance-beat")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        assert_eq!(json["error"], "infrastructure_error");
+    }
+
+    #[tokio::test]
+    async fn test_present_choice_returns_500_when_repository_fails() {
+        // Arrange
+        let app = router().with_state(failing_app_state());
+        let session_id = Uuid::new_v4();
+        let body = serde_json::json!({ "session_id": session_id });
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/present-choice")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        assert_eq!(json["error"], "infrastructure_error");
     }
 }
