@@ -1,9 +1,12 @@
 //! Aggregate roots for the Rules & Resolution context.
 
 use otherworlds_core::aggregate::AggregateRoot;
+use otherworlds_core::clock::Clock;
+use otherworlds_core::event::EventMetadata;
+use otherworlds_core::rng::DeterministicRng;
 use uuid::Uuid;
 
-use super::events::RulesEvent;
+use super::events::{CheckPerformed, IntentResolved, RulesEvent, RulesEventKind};
 
 /// The aggregate root for a resolution.
 #[derive(Debug)]
@@ -25,6 +28,74 @@ impl Resolution {
             version: 0,
             uncommitted_events: Vec::new(),
         }
+    }
+
+    /// Returns the next sequence number for a new event.
+    #[allow(clippy::cast_possible_wrap)]
+    fn next_sequence_number(&self) -> i64 {
+        self.version + self.uncommitted_events.len() as i64 + 1
+    }
+
+    /// Resolves a player intent, producing an `IntentResolved` event.
+    pub fn resolve_intent(&mut self, intent_id: Uuid, correlation_id: Uuid, clock: &dyn Clock) {
+        // TODO: event_id uses Uuid::new_v4() which breaks replay determinism.
+        // Requires extending DeterministicRng to support UUID generation and
+        // threading &mut dyn DeterministicRng through all domain methods.
+        let event = RulesEvent {
+            metadata: EventMetadata {
+                event_id: Uuid::new_v4(),
+                event_type: "rules.intent_resolved".to_owned(),
+                aggregate_id: self.id,
+                sequence_number: self.next_sequence_number(),
+                correlation_id,
+                causation_id: correlation_id,
+                occurred_at: clock.now(),
+            },
+            kind: RulesEventKind::IntentResolved(IntentResolved {
+                resolution_id: self.id,
+                intent_id,
+            }),
+        };
+
+        self.uncommitted_events.push(event);
+    }
+
+    /// Performs a check (skill, combat, etc.), producing a `CheckPerformed` event.
+    ///
+    /// Uses `DeterministicRng` for generating the check identifier, ensuring
+    /// deterministic replay when a seeded RNG is provided.
+    pub fn perform_check(
+        &mut self,
+        correlation_id: Uuid,
+        clock: &dyn Clock,
+        rng: &mut dyn DeterministicRng,
+    ) {
+        // TODO: event_id uses Uuid::new_v4() which breaks replay determinism.
+        // See TODO on `resolve_intent()` for details.
+
+        // Generate a deterministic check_id from two RNG-produced u32 halves.
+        let hi = u64::from(rng.next_u32_range(0, u32::MAX));
+        let lo = u64::from(rng.next_u32_range(0, u32::MAX));
+        let bits = (hi << 32) | lo;
+        let check_id = Uuid::from_u64_pair(bits, bits.wrapping_mul(0x517c_c1b7_2722_0a95));
+
+        let event = RulesEvent {
+            metadata: EventMetadata {
+                event_id: Uuid::new_v4(),
+                event_type: "rules.check_performed".to_owned(),
+                aggregate_id: self.id,
+                sequence_number: self.next_sequence_number(),
+                correlation_id,
+                causation_id: correlation_id,
+                occurred_at: clock.now(),
+            },
+            kind: RulesEventKind::CheckPerformed(CheckPerformed {
+                resolution_id: self.id,
+                check_id,
+            }),
+        };
+
+        self.uncommitted_events.push(event);
     }
 }
 
@@ -49,5 +120,121 @@ impl AggregateRoot for Resolution {
 
     fn clear_uncommitted_events(&mut self) {
         self.uncommitted_events.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{DateTime, TimeZone, Utc};
+    use otherworlds_core::aggregate::AggregateRoot;
+    use otherworlds_core::clock::Clock;
+    use otherworlds_core::event::DomainEvent;
+    use otherworlds_core::rng::DeterministicRng;
+
+    #[derive(Debug)]
+    struct FixedClock(DateTime<Utc>);
+
+    impl Clock for FixedClock {
+        fn now(&self) -> DateTime<Utc> {
+            self.0
+        }
+    }
+
+    #[derive(Debug)]
+    struct MockRng {
+        values: Vec<u32>,
+        index: usize,
+    }
+
+    impl MockRng {
+        fn new(values: Vec<u32>) -> Self {
+            Self { values, index: 0 }
+        }
+    }
+
+    impl DeterministicRng for MockRng {
+        fn next_u32_range(&mut self, _min: u32, _max: u32) -> u32 {
+            let val = self.values[self.index];
+            self.index += 1;
+            val
+        }
+
+        fn next_f64(&mut self) -> f64 {
+            0.0
+        }
+    }
+
+    #[test]
+    fn test_resolve_intent_produces_intent_resolved_event() {
+        // Arrange
+        let resolution_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let mut resolution = Resolution::new(resolution_id);
+
+        // Act
+        resolution.resolve_intent(intent_id, correlation_id, &clock);
+
+        // Assert
+        let events = resolution.uncommitted_events();
+        assert_eq!(events.len(), 1);
+
+        let event = &events[0];
+        assert_eq!(event.event_type(), "rules.intent_resolved");
+
+        let meta = event.metadata();
+        assert_eq!(meta.aggregate_id, resolution_id);
+        assert_eq!(meta.sequence_number, 1);
+        assert_eq!(meta.correlation_id, correlation_id);
+        assert_eq!(meta.causation_id, correlation_id);
+        assert_eq!(meta.occurred_at, fixed_now);
+
+        match &event.kind {
+            RulesEventKind::IntentResolved(payload) => {
+                assert_eq!(payload.resolution_id, resolution_id);
+                assert_eq!(payload.intent_id, intent_id);
+            }
+            other => panic!("expected IntentResolved, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_perform_check_produces_check_performed_event() {
+        // Arrange
+        let resolution_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let mut resolution = Resolution::new(resolution_id);
+        let mut rng = MockRng::new(vec![42, 99]);
+
+        // Act
+        resolution.perform_check(correlation_id, &clock, &mut rng);
+
+        // Assert
+        let events = resolution.uncommitted_events();
+        assert_eq!(events.len(), 1);
+
+        let event = &events[0];
+        assert_eq!(event.event_type(), "rules.check_performed");
+
+        let meta = event.metadata();
+        assert_eq!(meta.aggregate_id, resolution_id);
+        assert_eq!(meta.sequence_number, 1);
+        assert_eq!(meta.correlation_id, correlation_id);
+        assert_eq!(meta.causation_id, correlation_id);
+        assert_eq!(meta.occurred_at, fixed_now);
+
+        match &event.kind {
+            RulesEventKind::CheckPerformed(payload) => {
+                assert_eq!(payload.resolution_id, resolution_id);
+                // check_id should be deterministic given the same RNG seed values.
+                assert_ne!(payload.check_id, Uuid::nil());
+            }
+            other => panic!("expected CheckPerformed, got {other:?}"),
+        }
     }
 }
