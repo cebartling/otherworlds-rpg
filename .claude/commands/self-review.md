@@ -27,10 +27,11 @@ Also run `git log --oneline main..HEAD` to see all commits being reviewed.
 
 Read these files in full every time. Do not skip this. Do not rely on prior context:
 
+- `CLAUDE.md`
 - `documentation/TECHNICAL_MANIFESTO.md`
 - `documentation/PRODUCT_MANIFESTO.md`
 
-Extract the non-negotiable constraints and architectural pillars. You will check every change against them.
+`CLAUDE.md` defines build commands, architecture rules, TDD workflow, and code conventions. The manifestos define non-negotiable constraints and architectural pillars. You will check every change against all three.
 
 ---
 
@@ -96,13 +97,17 @@ Evaluate every change against **all** of the following. If a category does not a
 - No silently swallowed exceptions/errors?
 - Domain errors vs infrastructure errors properly separated?
 
-### 4.5 Testing Gaps
+### 4.5 TDD Compliance & Testing Gaps
 
-- Are new domain events tested with event-driven patterns?
-- Are determinism-sensitive paths tested with injected Clock/Rng?
+- **Red-green TDD**: Does every new piece of production code have a corresponding test that was written first? If production code exists without tests, flag it.
+- Does every new function, handler, or trait implementation have a test that would fail if the implementation were removed?
 - Are command handlers tested with expected event outputs?
+- Are aggregates tested by applying events and asserting resulting state?
+- Are determinism-sensitive paths tested with injected Clock/Rng?
 - Are there missing regression tests for bug fixes?
 - Do tests actually assert meaningful behavior (not just "it compiles")?
+- Are tests in the right place? Unit tests in `#[cfg(test)] mod tests` inline, integration tests in `tests/`.
+- Do test names describe behavior? (`test_advance_beat_produces_beat_advanced_event`, not `test_1`)
 
 ### 4.6 Security
 
