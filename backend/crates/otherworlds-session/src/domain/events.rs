@@ -33,6 +33,15 @@ pub struct TimelineBranched {
     pub from_checkpoint_id: Uuid,
 }
 
+/// Event type identifier for [`CampaignRunStarted`].
+pub const CAMPAIGN_RUN_STARTED_EVENT_TYPE: &str = "session.campaign_run_started";
+
+/// Event type identifier for [`CheckpointCreated`].
+pub const CHECKPOINT_CREATED_EVENT_TYPE: &str = "session.checkpoint_created";
+
+/// Event type identifier for [`TimelineBranched`].
+pub const TIMELINE_BRANCHED_EVENT_TYPE: &str = "session.timeline_branched";
+
 /// Event payload variants for the Session & Progress context.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SessionEventKind {
@@ -56,9 +65,9 @@ pub struct SessionEvent {
 impl DomainEvent for SessionEvent {
     fn event_type(&self) -> &'static str {
         match &self.kind {
-            SessionEventKind::CampaignRunStarted(_) => "session.campaign_run_started",
-            SessionEventKind::CheckpointCreated(_) => "session.checkpoint_created",
-            SessionEventKind::TimelineBranched(_) => "session.timeline_branched",
+            SessionEventKind::CampaignRunStarted(_) => CAMPAIGN_RUN_STARTED_EVENT_TYPE,
+            SessionEventKind::CheckpointCreated(_) => CHECKPOINT_CREATED_EVENT_TYPE,
+            SessionEventKind::TimelineBranched(_) => TIMELINE_BRANCHED_EVENT_TYPE,
         }
     }
 
