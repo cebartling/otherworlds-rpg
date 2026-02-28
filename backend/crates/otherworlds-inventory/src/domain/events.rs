@@ -31,6 +31,15 @@ pub struct ItemEquipped {
     pub item_id: Uuid,
 }
 
+/// Event type identifier for [`ItemAdded`].
+pub const ITEM_ADDED_EVENT_TYPE: &str = "inventory.item_added";
+
+/// Event type identifier for [`ItemRemoved`].
+pub const ITEM_REMOVED_EVENT_TYPE: &str = "inventory.item_removed";
+
+/// Event type identifier for [`ItemEquipped`].
+pub const ITEM_EQUIPPED_EVENT_TYPE: &str = "inventory.item_equipped";
+
 /// Event payload variants for the Inventory & Economy context.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum InventoryEventKind {
@@ -54,9 +63,9 @@ pub struct InventoryEvent {
 impl DomainEvent for InventoryEvent {
     fn event_type(&self) -> &'static str {
         match &self.kind {
-            InventoryEventKind::ItemAdded(_) => "inventory.item_added",
-            InventoryEventKind::ItemRemoved(_) => "inventory.item_removed",
-            InventoryEventKind::ItemEquipped(_) => "inventory.item_equipped",
+            InventoryEventKind::ItemAdded(_) => ITEM_ADDED_EVENT_TYPE,
+            InventoryEventKind::ItemRemoved(_) => ITEM_REMOVED_EVENT_TYPE,
+            InventoryEventKind::ItemEquipped(_) => ITEM_EQUIPPED_EVENT_TYPE,
         }
     }
 
