@@ -1,6 +1,6 @@
 //! Integration tests for `PgEventRepository`.
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use otherworlds_core::error::DomainError;
 use otherworlds_core::repository::{EventRepository, StoredEvent};
 use otherworlds_event_store::pg_event_repository::PgEventRepository;
@@ -17,7 +17,8 @@ fn make_stored_event(aggregate_id: Uuid, sequence_number: i64) -> StoredEvent {
         sequence_number,
         correlation_id: Uuid::new_v4(),
         causation_id: Uuid::new_v4(),
-        occurred_at: Utc::now(),
+        // Truncate to microsecond precision to match PostgreSQL TIMESTAMPTZ.
+        occurred_at: DateTime::from_timestamp_micros(Utc::now().timestamp_micros()).unwrap(),
     }
 }
 
