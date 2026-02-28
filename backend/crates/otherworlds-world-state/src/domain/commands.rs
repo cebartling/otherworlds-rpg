@@ -10,6 +10,8 @@ pub struct ApplyEffect {
     pub correlation_id: Uuid,
     /// The world snapshot identifier.
     pub world_id: Uuid,
+    /// The fact key to apply.
+    pub fact_key: String,
 }
 
 impl Command for ApplyEffect {
