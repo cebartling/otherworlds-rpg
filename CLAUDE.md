@@ -105,7 +105,7 @@ Every domain event carries: `event_id` (UUID), `aggregate_id`, `sequence_number`
 
 ## Manifesto-Driven Development
 
-Read `documentation/TECHNICAL_MANIFESTO.md` and `documentation/PRODUCT_MANIFESTO.md` before making architectural decisions. Six non-negotiable constraints: **Deterministic, Event-driven, Modular, Replayable, Versioned, Infrastructure-agnostic**. Any feature that introduces implicit state mutation, couples campaign logic to engine code, or breaks replay determinism must be rejected or redesigned.
+Read `documentation/TECHNICAL_MANIFESTO.md` and `documentation/PRODUCT_MANIFESTO.md` before making architectural decisions. Architecture Decision Records live in `documentation/adr/` — consult existing ADRs before proposing changes and write a new ADR for any significant architectural decision. Six non-negotiable constraints: **Deterministic, Event-driven, Modular, Replayable, Versioned, Infrastructure-agnostic**. Any feature that introduces implicit state mutation, couples campaign logic to engine code, or breaks replay determinism must be rejected or redesigned.
 
 ## Test-Driven Development
 
