@@ -1,9 +1,9 @@
-//! `PostgreSQL` implementation of the `EventRepository` trait.
+//! Event Store — `PostgreSQL` `EventRepository` implementation.
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, warn};
 use uuid::Uuid;
 
 use otherworlds_core::error::DomainError;
@@ -71,17 +71,30 @@ async fn map_sqlx_error(
     expected_version: i64,
 ) -> DomainError {
     if is_unique_violation(&err) {
-        let actual = current_version(pool, aggregate_id).await.unwrap_or(-1);
-        return DomainError::ConcurrencyConflict {
-            aggregate_id,
-            expected: expected_version,
-            actual,
-        };
+        match current_version(pool, aggregate_id).await {
+            Ok(actual) => {
+                return DomainError::ConcurrencyConflict {
+                    aggregate_id,
+                    expected: expected_version,
+                    actual,
+                };
+            }
+            Err(version_err) => {
+                warn!(
+                    %aggregate_id,
+                    "failed to query current version after unique violation: {version_err}"
+                );
+                return DomainError::Infrastructure(format!(
+                    "unique violation on aggregate {aggregate_id}, \
+                     but failed to determine current version: {version_err}"
+                ));
+            }
+        }
     }
     DomainError::Infrastructure(err.to_string())
 }
 
-/// PostgreSQL-backed event repository.
+/// `PostgreSQL`-backed event repository.
 #[derive(Debug, Clone)]
 pub struct PgEventRepository {
     pool: PgPool,
@@ -133,27 +146,53 @@ impl EventRepository for PgEventRepository {
             .await
             .map_err(|e| DomainError::Infrastructure(e.to_string()))?;
 
-        for event in events {
-            let result = sqlx::query(
-                "INSERT INTO domain_events \
-                    (event_id, aggregate_id, event_type, payload, \
-                     sequence_number, correlation_id, causation_id, occurred_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-            )
-            .bind(event.event_id)
-            .bind(event.aggregate_id)
-            .bind(&event.event_type)
-            .bind(&event.payload)
-            .bind(event.sequence_number)
-            .bind(event.correlation_id)
-            .bind(event.causation_id)
-            .bind(event.occurred_at)
-            .execute(&mut *tx)
-            .await;
+        // Proactive optimistic concurrency check: verify expected_version
+        // matches the current max sequence_number within the transaction.
+        let row: (Option<i64>,) = sqlx::query_as(
+            "SELECT MAX(sequence_number) FROM domain_events WHERE aggregate_id = $1",
+        )
+        .bind(aggregate_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| DomainError::Infrastructure(e.to_string()))?;
+        let actual_version = row.0.unwrap_or(0);
 
-            if let Err(err) = result {
-                return Err(map_sqlx_error(err, &self.pool, aggregate_id, expected_version).await);
-            }
+        if actual_version != expected_version {
+            return Err(DomainError::ConcurrencyConflict {
+                aggregate_id,
+                expected: expected_version,
+                actual: actual_version,
+            });
+        }
+
+        let event_ids: Vec<Uuid> = events.iter().map(|e| e.event_id).collect();
+        let aggregate_ids: Vec<Uuid> = events.iter().map(|e| e.aggregate_id).collect();
+        let event_types: Vec<&str> = events.iter().map(|e| e.event_type.as_str()).collect();
+        let payloads: Vec<&serde_json::Value> = events.iter().map(|e| &e.payload).collect();
+        let sequence_numbers: Vec<i64> = events.iter().map(|e| e.sequence_number).collect();
+        let correlation_ids: Vec<Uuid> = events.iter().map(|e| e.correlation_id).collect();
+        let causation_ids: Vec<Uuid> = events.iter().map(|e| e.causation_id).collect();
+        let occurred_ats: Vec<DateTime<Utc>> = events.iter().map(|e| e.occurred_at).collect();
+
+        let result = sqlx::query(
+            "INSERT INTO domain_events \
+                (event_id, aggregate_id, event_type, payload, \
+                 sequence_number, correlation_id, causation_id, occurred_at) \
+             SELECT * FROM UNNEST($1, $2, $3, $4, $5, $6, $7, $8)",
+        )
+        .bind(&event_ids)
+        .bind(&aggregate_ids)
+        .bind(&event_types)
+        .bind(&payloads)
+        .bind(&sequence_numbers)
+        .bind(&correlation_ids)
+        .bind(&causation_ids)
+        .bind(&occurred_ats)
+        .execute(&mut *tx)
+        .await;
+
+        if let Err(err) = result {
+            return Err(map_sqlx_error(err, &self.pool, aggregate_id, expected_version).await);
         }
 
         tx.commit()
