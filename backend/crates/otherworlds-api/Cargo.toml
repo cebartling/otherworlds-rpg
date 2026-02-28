@@ -40,3 +40,4 @@ tracing-subscriber = { workspace = true }
 [dev-dependencies]
 async-trait = { workspace = true }
 chrono = { workspace = true }
+tower = { workspace = true }
