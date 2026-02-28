@@ -1,0 +1,19 @@
+[package]
+name = "otherworlds-content"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Otherworlds RPG — Content Authoring bounded context"
+
+[lints]
+workspace = true
+
+[dependencies]
+otherworlds-core = { path = "../otherworlds-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }

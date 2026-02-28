@@ -1,18 +1,42 @@
-# Build and Release Folders
-bin-debug/
-bin-release/
-[Oo]bj/
-[Bb]in/
+# Rust
+/target/
+**/target/
+**/*.rs.bk
+# Cargo.lock is committed for binary crates
+!/Cargo.lock
 
-# Other files and folders
-.settings/
+# Node.js / SvelteKit
+node_modules/
+.svelte-kit/
+build/
+dist/
+*.tsbuildinfo
 
-# Executables
-*.swf
-*.air
-*.ipa
-*.apk
+# Swift / Xcode
+DerivedData/
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist
+*.playground/timeline.xctimeline
+.build/
+Packages/
+Package.resolved
 
-# Project files, i.e. `.project`, `.actionScriptProperties` and `.flexProperties`
-# should NOT be excluded as they contain compiler settings and other important
-# information for Eclipse / Flash Builder.
+# Docker
+.docker/
+
+# IDE / Editor
+.idea/
+.vscode/
+*.iml
+
+# Environment
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# macOS
+.DS_Store
+*.swp
+*~

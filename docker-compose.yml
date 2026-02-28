@@ -1,0 +1,36 @@
+services:
+  postgres:
+    image: postgres:18
+    container_name: otherworlds-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-otherworlds}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-otherworlds}
+      POSTGRES_DB: ${POSTGRES_DB:-otherworlds}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U otherworlds"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: otherworlds-api
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-otherworlds}:${POSTGRES_PASSWORD:-otherworlds}@postgres:5432/${POSTGRES_DB:-otherworlds}
+      HOST: 0.0.0.0
+      PORT: 3000
+      RUST_LOG: ${RUST_LOG:-info}
+    ports:
+      - "${API_PORT:-3000}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
