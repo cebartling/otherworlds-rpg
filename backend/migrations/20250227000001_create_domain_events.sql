@@ -1,7 +1,4 @@
-//! Event store database schema.
-
-/// SQL to create the events table.
-pub const CREATE_EVENTS_TABLE: &str = r"
+-- Create the domain events table for the event store.
 CREATE TABLE IF NOT EXISTS domain_events (
     event_id        UUID PRIMARY KEY,
     aggregate_id    UUID NOT NULL,
@@ -19,4 +16,3 @@ CREATE INDEX IF NOT EXISTS idx_domain_events_aggregate_id
 
 CREATE INDEX IF NOT EXISTS idx_domain_events_correlation_id
     ON domain_events (correlation_id);
-";

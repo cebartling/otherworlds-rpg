@@ -1,7 +1,7 @@
-//! Otherworlds RPG API server entry point.
+//! Otherworlds RPG — API server entry point.
 
-use std::error::Error;
 use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
 
 use axum::Router;
 use sqlx::postgres::PgPoolOptions;
@@ -9,11 +9,14 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
+mod error;
 mod routes;
 mod state;
 
+use error::AppError;
+
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> Result<(), AppError> {
     // Initialize tracing subscriber.
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -26,12 +29,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Read configuration from environment.
     let database_url = std::env::var("DATABASE_URL")
-        .map_err(|_| "DATABASE_URL environment variable must be set")?;
-    let host = std::env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
+        .map_err(|_| AppError::Config("DATABASE_URL environment variable must be set".into()))?;
+    let host = std::env::var("HOST")
+        .map_err(|_| AppError::Config("HOST environment variable must be set".into()))?;
     let port: u16 = std::env::var("PORT")
-        .unwrap_or_else(|_| "3000".to_string())
+        .map_err(|_| AppError::Config("PORT environment variable must be set".into()))?
         .parse()
-        .map_err(|e| format!("PORT must be a valid u16: {e}"))?;
+        .map_err(|e| AppError::Config(format!("PORT must be a valid u16: {e}")))?;
+
+    // Validate HOST:PORT combination early.
+    let addr: SocketAddr = format!("{host}:{port}")
+        .parse()
+        .map_err(|e| AppError::Config(format!("invalid HOST:PORT combination: {e}")))?;
 
     // Create database connection pool.
     let pool = PgPoolOptions::new()
@@ -39,11 +48,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .connect(&database_url)
         .await?;
 
-    // Build application state.
-    let app_state = state::AppState::new(pool);
+    // Build application state with injected Clock and RNG for determinism.
+    let clock: Arc<dyn otherworlds_core::clock::Clock + Send + Sync> =
+        Arc::new(otherworlds_core::clock::SystemClock);
+    let rng: Arc<Mutex<dyn otherworlds_core::rng::DeterministicRng + Send>> =
+        Arc::new(Mutex::new(otherworlds_core::rng::StdRng));
+    let app_state = state::AppState::new(pool, clock, rng);
+
+    // Build CORS layer.
+    let cors = if std::env::var("CORS_PERMISSIVE").is_ok_and(|v| v == "true") {
+        tracing::warn!("CORS_PERMISSIVE=true — using permissive CORS policy");
+        CorsLayer::permissive()
+    } else {
+        tracing::info!("Using default restrictive CORS policy");
+        CorsLayer::new()
+    };
 
     // Build router.
-    // TODO: Replace CorsLayer::permissive() with restricted origins for production.
     let app = Router::new()
         .merge(routes::health::router())
         .nest("/api/v1/narrative", routes::narrative::router())
@@ -54,13 +75,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .nest("/api/v1/sessions", routes::session::router())
         .nest("/api/v1/content", routes::content::router())
         .layer(TraceLayer::new_for_http())
-        .layer(CorsLayer::permissive())
+        .layer(cors)
         .with_state(app_state);
 
     // Start server.
-    let addr: SocketAddr = format!("{host}:{port}")
-        .parse()
-        .map_err(|e| format!("invalid HOST:PORT combination: {e}"))?;
     tracing::info!("Listening on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;

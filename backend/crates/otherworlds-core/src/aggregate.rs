@@ -5,7 +5,7 @@ use uuid::Uuid;
 use crate::event::DomainEvent;
 
 /// Trait for aggregate roots that reconstitute from event history.
-pub trait AggregateRoot: Send + Sync {
+pub trait AggregateRoot: Send + Sync + std::fmt::Debug {
     /// The event type this aggregate produces and consumes.
     type Event: DomainEvent;
 

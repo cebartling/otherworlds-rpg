@@ -31,7 +31,7 @@ impl EventRepository for PgEventRepository {
         &self,
         _aggregate_id: Uuid,
         _expected_version: i64,
-        _events: Vec<StoredEvent>,
+        _events: &[StoredEvent],
     ) -> Result<(), DomainError> {
         todo!("PostgreSQL event appending will be implemented in the next phase")
     }

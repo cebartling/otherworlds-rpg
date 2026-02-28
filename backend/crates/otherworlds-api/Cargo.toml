@@ -26,6 +26,7 @@ otherworlds-session = { path = "../otherworlds-session" }
 otherworlds-content = { path = "../otherworlds-content" }
 
 # External dependencies
+thiserror = { workspace = true }
 axum = { workspace = true }
 tokio = { workspace = true }
 tower-http = { workspace = true }

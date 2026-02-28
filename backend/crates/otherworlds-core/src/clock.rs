@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 
 /// Abstraction over system time for deterministic behavior.
-pub trait Clock: Send + Sync {
+pub trait Clock: Send + Sync + std::fmt::Debug {
     /// Returns the current time.
     fn now(&self) -> DateTime<Utc>;
 }

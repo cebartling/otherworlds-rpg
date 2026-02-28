@@ -38,6 +38,6 @@ pub trait EventRepository: Send + Sync {
         &self,
         aggregate_id: Uuid,
         expected_version: i64,
-        events: Vec<StoredEvent>,
+        events: &[StoredEvent],
     ) -> Result<(), DomainError>;
 }
