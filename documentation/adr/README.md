@@ -27,3 +27,12 @@ Write an ADR when you make a decision that:
 | ADR | Title | Status |
 |-----|-------|--------|
 | [0001](0001-event-sourcing-and-cqrs.md) | Event Sourcing and CQRS | Accepted |
+| [0002](0002-modular-monolith-architecture.md) | Modular Monolith Architecture | Accepted |
+| [0003](0003-determinism-via-injected-abstractions.md) | Determinism via Injected Abstractions | Accepted |
+| [0004](0004-bounded-context-isolation.md) | Bounded Context Isolation via Strict Dependency Direction | Accepted |
+| [0005](0005-campaign-independence.md) | Externally-Authored Versioned Campaigns | Accepted |
+| [0006](0006-rust-axum-postgresql-tech-stack.md) | Rust, Axum, and PostgreSQL Tech Stack | Accepted |
+| [0007](0007-api-route-versioning.md) | API Route Nesting and Versioning | Accepted |
+| [0008](0008-workspace-lint-policy.md) | Workspace Lint Policy (Forbid Unsafe, Clippy Pedantic) | Accepted |
+| [0009](0009-structured-domain-error-handling.md) | Structured Domain Error Handling with thiserror | Accepted |
+| [0010](0010-editorconfig-formatting-standards.md) | Cross-Language Formatting Standards via .editorconfig | Accepted |
