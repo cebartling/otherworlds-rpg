@@ -48,12 +48,15 @@ async fn main() -> Result<(), AppError> {
         .connect(&database_url)
         .await?;
 
-    // Build application state with injected Clock and RNG for determinism.
+    // Build application state with injected Clock, RNG, and EventRepository.
     let clock: Arc<dyn otherworlds_core::clock::Clock + Send + Sync> =
         Arc::new(otherworlds_core::clock::SystemClock);
     let rng: Arc<Mutex<dyn otherworlds_core::rng::DeterministicRng + Send>> =
         Arc::new(Mutex::new(otherworlds_core::rng::StdRng));
-    let app_state = state::AppState::new(pool, clock, rng);
+    let event_repository: Arc<dyn otherworlds_core::repository::EventRepository> = Arc::new(
+        otherworlds_event_store::pg_event_repository::PgEventRepository::new(pool.clone()),
+    );
+    let app_state = state::AppState::new(pool, clock, rng, event_repository);
 
     // Build CORS layer.
     let cors = if std::env::var("CORS_PERMISSIVE").is_ok_and(|v| v == "true") {

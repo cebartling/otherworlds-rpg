@@ -28,7 +28,7 @@ pub struct StoredEvent {
 
 /// Repository trait for loading and appending domain events.
 #[async_trait]
-pub trait EventRepository: Send + Sync {
+pub trait EventRepository: Send + Sync + std::fmt::Debug {
     /// Load all events for a given aggregate, ordered by sequence number.
     async fn load_events(&self, aggregate_id: Uuid) -> Result<Vec<StoredEvent>, DomainError>;
 
