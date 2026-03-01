@@ -143,37 +143,18 @@ mod tests {
 
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
-    use chrono::{DateTime, TimeZone, Utc};
+    use chrono::{TimeZone, Utc};
     use otherworlds_core::clock::Clock;
     use otherworlds_core::error::DomainError;
     use otherworlds_core::repository::{EventRepository, StoredEvent};
     use otherworlds_core::rng::DeterministicRng;
+    use otherworlds_test_support::{
+        EmptyEventRepository, FailingEventRepository, FixedClock, MockRng,
+    };
     use serde_json::Value;
     use sqlx::PgPool;
     use std::sync::{Arc, Mutex};
     use tower::ServiceExt;
-
-    #[derive(Debug)]
-    struct FixedClock(DateTime<Utc>);
-
-    impl Clock for FixedClock {
-        fn now(&self) -> DateTime<Utc> {
-            self.0
-        }
-    }
-
-    #[derive(Debug)]
-    struct MockRng;
-
-    impl DeterministicRng for MockRng {
-        fn next_u32_range(&mut self, min: u32, _max: u32) -> u32 {
-            min
-        }
-
-        fn next_f64(&mut self) -> f64 {
-            0.0
-        }
-    }
 
     #[derive(Debug)]
     struct MockEventRepository;
@@ -201,44 +182,6 @@ mod tests {
             _events: &[StoredEvent],
         ) -> Result<(), DomainError> {
             Ok(())
-        }
-    }
-
-    #[derive(Debug)]
-    struct EmptyEventRepository;
-
-    #[async_trait::async_trait]
-    impl EventRepository for EmptyEventRepository {
-        async fn load_events(&self, _aggregate_id: Uuid) -> Result<Vec<StoredEvent>, DomainError> {
-            Ok(vec![])
-        }
-
-        async fn append_events(
-            &self,
-            _aggregate_id: Uuid,
-            _expected_version: i64,
-            _events: &[StoredEvent],
-        ) -> Result<(), DomainError> {
-            Ok(())
-        }
-    }
-
-    #[derive(Debug)]
-    struct FailingEventRepository;
-
-    #[async_trait::async_trait]
-    impl EventRepository for FailingEventRepository {
-        async fn load_events(&self, _aggregate_id: Uuid) -> Result<Vec<StoredEvent>, DomainError> {
-            Err(DomainError::Infrastructure("connection refused".into()))
-        }
-
-        async fn append_events(
-            &self,
-            _aggregate_id: Uuid,
-            _expected_version: i64,
-            _events: &[StoredEvent],
-        ) -> Result<(), DomainError> {
-            Err(DomainError::Infrastructure("connection refused".into()))
         }
     }
 

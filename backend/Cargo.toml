@@ -10,6 +10,7 @@ members = [
   "crates/otherworlds-inventory",
   "crates/otherworlds-session",
   "crates/otherworlds-content",
+  "crates/otherworlds-test-support",
   "crates/otherworlds-api",
 ]
 
@@ -54,6 +55,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 # Async trait
 async-trait = "0.1"
+
+# Test support
+otherworlds-test-support = { path = "crates/otherworlds-test-support" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

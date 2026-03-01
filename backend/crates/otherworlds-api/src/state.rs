@@ -43,61 +43,15 @@ impl AppState {
 mod tests {
     use super::*;
 
-    use async_trait::async_trait;
-    use chrono::{DateTime, Utc};
-    use otherworlds_core::repository::{EventRepository, StoredEvent};
-    use uuid::Uuid;
-
-    #[derive(Debug)]
-    struct MockClock;
-
-    impl Clock for MockClock {
-        fn now(&self) -> DateTime<Utc> {
-            DateTime::UNIX_EPOCH
-        }
-    }
-
-    #[derive(Debug)]
-    struct MockRng;
-
-    impl DeterministicRng for MockRng {
-        fn next_u32_range(&mut self, min: u32, _max: u32) -> u32 {
-            min
-        }
-
-        fn next_f64(&mut self) -> f64 {
-            0.0
-        }
-    }
-
-    #[derive(Debug)]
-    struct MockEventRepository;
-
-    #[async_trait]
-    impl EventRepository for MockEventRepository {
-        async fn load_events(
-            &self,
-            _aggregate_id: Uuid,
-        ) -> Result<Vec<StoredEvent>, otherworlds_core::error::DomainError> {
-            Ok(vec![])
-        }
-
-        async fn append_events(
-            &self,
-            _aggregate_id: Uuid,
-            _expected_version: i64,
-            _events: &[StoredEvent],
-        ) -> Result<(), otherworlds_core::error::DomainError> {
-            Ok(())
-        }
-    }
+    use otherworlds_test_support::{EmptyEventRepository, FixedClock, MockRng};
 
     #[tokio::test]
     async fn test_app_state_holds_event_repository() {
         let pool = PgPool::connect_lazy("postgres://localhost/test").unwrap();
-        let clock: Arc<dyn Clock + Send + Sync> = Arc::new(MockClock);
+        let clock: Arc<dyn Clock + Send + Sync> =
+            Arc::new(FixedClock(chrono::DateTime::UNIX_EPOCH));
         let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
-        let event_repository: Arc<dyn EventRepository> = Arc::new(MockEventRepository);
+        let event_repository: Arc<dyn EventRepository> = Arc::new(EmptyEventRepository);
 
         let state = AppState::new(pool, clock, rng, event_repository.clone());
 

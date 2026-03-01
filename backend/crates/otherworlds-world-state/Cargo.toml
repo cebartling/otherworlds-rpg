@@ -20,3 +20,4 @@ async-trait = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
+otherworlds-test-support = { workspace = true }

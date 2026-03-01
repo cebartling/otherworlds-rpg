@@ -1,0 +1,17 @@
+[package]
+name = "otherworlds-test-support"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Shared test mocks and utilities for the Otherworlds RPG engine"
+
+[lints]
+workspace = true
+
+[dependencies]
+otherworlds-core = { path = "../otherworlds-core" }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+serde_json = { workspace = true }

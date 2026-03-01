@@ -95,67 +95,12 @@ pub async fn handle_present_choice(
 
 #[cfg(test)]
 mod tests {
-    use chrono::{DateTime, TimeZone, Utc};
-    use otherworlds_core::clock::Clock;
-    use otherworlds_core::error::DomainError;
-    use otherworlds_core::repository::{EventRepository, StoredEvent};
-    use std::sync::Mutex;
+    use chrono::{TimeZone, Utc};
     use uuid::Uuid;
 
     use crate::application::command_handlers::{handle_advance_beat, handle_present_choice};
     use crate::domain::commands::{AdvanceBeat, PresentChoice};
-
-    #[derive(Debug)]
-    struct FixedClock(DateTime<Utc>);
-
-    impl Clock for FixedClock {
-        fn now(&self) -> DateTime<Utc> {
-            self.0
-        }
-    }
-
-    #[derive(Debug)]
-    struct MockEventRepository {
-        load_result: Mutex<Option<Result<Vec<StoredEvent>, DomainError>>>,
-        appended: Mutex<Vec<(Uuid, i64, Vec<StoredEvent>)>>,
-    }
-
-    impl MockEventRepository {
-        fn new(load_result: Result<Vec<StoredEvent>, DomainError>) -> Self {
-            Self {
-                load_result: Mutex::new(Some(load_result)),
-                appended: Mutex::new(Vec::new()),
-            }
-        }
-
-        fn appended_events(&self) -> Vec<(Uuid, i64, Vec<StoredEvent>)> {
-            self.appended.lock().unwrap().clone()
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl EventRepository for MockEventRepository {
-        async fn load_events(&self, _aggregate_id: Uuid) -> Result<Vec<StoredEvent>, DomainError> {
-            self.load_result
-                .lock()
-                .unwrap()
-                .take()
-                .unwrap_or(Ok(Vec::new()))
-        }
-
-        async fn append_events(
-            &self,
-            aggregate_id: Uuid,
-            expected_version: i64,
-            events: &[StoredEvent],
-        ) -> Result<(), DomainError> {
-            self.appended
-                .lock()
-                .unwrap()
-                .push((aggregate_id, expected_version, events.to_vec()));
-            Ok(())
-        }
-    }
+    use otherworlds_test_support::{FixedClock, RecordingEventRepository};
 
     #[tokio::test]
     async fn test_handle_advance_beat_persists_beat_advanced_event() {
@@ -164,7 +109,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
-        let repo = MockEventRepository::new(Ok(Vec::new()));
+        let repo = RecordingEventRepository::new(Ok(Vec::new()));
 
         let command = AdvanceBeat {
             correlation_id,
@@ -201,7 +146,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
-        let repo = MockEventRepository::new(Ok(Vec::new()));
+        let repo = RecordingEventRepository::new(Ok(Vec::new()));
 
         let command = PresentChoice {
             correlation_id,

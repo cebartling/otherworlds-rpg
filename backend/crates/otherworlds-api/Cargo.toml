@@ -41,3 +41,4 @@ tracing-subscriber = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
 tower = { workspace = true }
+otherworlds-test-support = { workspace = true }

@@ -1011,6 +1011,7 @@ dependencies = [
  "otherworlds-narrative",
  "otherworlds-rules",
  "otherworlds-session",
+ "otherworlds-test-support",
  "otherworlds-world-state",
  "serde",
  "serde_json",
@@ -1031,6 +1032,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "otherworlds-core",
+ "otherworlds-test-support",
  "serde",
  "serde_json",
  "thiserror",
@@ -1045,6 +1047,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "otherworlds-core",
+ "otherworlds-test-support",
  "serde",
  "serde_json",
  "sha2",
@@ -1089,6 +1092,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "otherworlds-core",
+ "otherworlds-test-support",
  "serde",
  "serde_json",
  "thiserror",
@@ -1103,6 +1107,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "otherworlds-core",
+ "otherworlds-test-support",
  "serde",
  "serde_json",
  "thiserror",
@@ -1117,6 +1122,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "otherworlds-core",
+ "otherworlds-test-support",
  "serde",
  "serde_json",
  "thiserror",
@@ -1131,10 +1137,22 @@ dependencies = [
  "async-trait",
  "chrono",
  "otherworlds-core",
+ "otherworlds-test-support",
  "serde",
  "serde_json",
  "thiserror",
  "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "otherworlds-test-support"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "otherworlds-core",
+ "serde_json",
  "uuid",
 ]
 
@@ -1145,6 +1163,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "otherworlds-core",
+ "otherworlds-test-support",
  "serde",
  "serde_json",
  "thiserror",

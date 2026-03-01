@@ -126,44 +126,10 @@ impl AggregateRoot for Resolution {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{DateTime, TimeZone, Utc};
+    use chrono::{TimeZone, Utc};
     use otherworlds_core::aggregate::AggregateRoot;
-    use otherworlds_core::clock::Clock;
     use otherworlds_core::event::DomainEvent;
-    use otherworlds_core::rng::DeterministicRng;
-
-    #[derive(Debug)]
-    struct FixedClock(DateTime<Utc>);
-
-    impl Clock for FixedClock {
-        fn now(&self) -> DateTime<Utc> {
-            self.0
-        }
-    }
-
-    #[derive(Debug)]
-    struct MockRng {
-        values: Vec<u32>,
-        index: usize,
-    }
-
-    impl MockRng {
-        fn new(values: Vec<u32>) -> Self {
-            Self { values, index: 0 }
-        }
-    }
-
-    impl DeterministicRng for MockRng {
-        fn next_u32_range(&mut self, _min: u32, _max: u32) -> u32 {
-            let val = self.values[self.index];
-            self.index += 1;
-            val
-        }
-
-        fn next_f64(&mut self) -> f64 {
-            0.0
-        }
-    }
+    use otherworlds_test_support::{FixedClock, SequenceRng};
 
     #[test]
     fn test_resolve_intent_produces_intent_resolved_event() {
@@ -209,7 +175,7 @@ mod tests {
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
         let mut resolution = Resolution::new(resolution_id);
-        let mut rng = MockRng::new(vec![42, 99]);
+        let mut rng = SequenceRng::new(vec![42, 99]);
 
         // Act
         resolution.perform_check(correlation_id, &clock, &mut rng);

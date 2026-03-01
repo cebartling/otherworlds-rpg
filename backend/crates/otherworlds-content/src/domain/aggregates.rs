@@ -236,19 +236,10 @@ impl AggregateRoot for Campaign {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{DateTime, TimeZone, Utc};
+    use chrono::{TimeZone, Utc};
     use otherworlds_core::aggregate::AggregateRoot;
-    use otherworlds_core::clock::Clock;
     use otherworlds_core::event::DomainEvent;
-
-    #[derive(Debug)]
-    struct FixedClock(DateTime<Utc>);
-
-    impl Clock for FixedClock {
-        fn now(&self) -> DateTime<Utc> {
-            self.0
-        }
-    }
+    use otherworlds_test_support::FixedClock;
 
     #[test]
     fn test_ingest_campaign_produces_campaign_ingested_event() {
