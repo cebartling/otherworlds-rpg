@@ -8,22 +8,34 @@ use otherworlds_core::repository::{EventRepository, StoredEvent};
 use uuid::Uuid;
 
 /// An event repository that records all `load_events` and `append_events`
-/// calls. Returns a configurable result from `load_events` on the first call
-/// (falling back to `Ok(vec![])` on subsequent calls) and always succeeds on
-/// `append_events`.
+/// calls. Returns the configured result from `load_events` on every call and
+/// always succeeds on `append_events`.
 #[derive(Debug)]
 pub struct RecordingEventRepository {
-    load_result: Mutex<Option<Result<Vec<StoredEvent>, DomainError>>>,
+    load_result: Mutex<Vec<StoredEvent>>,
     appended: Mutex<Vec<(Uuid, i64, Vec<StoredEvent>)>>,
 }
 
 impl RecordingEventRepository {
-    /// Create a new recording repository that will return `load_result` on the
-    /// first `load_events` call.
+    /// Create a new recording repository that will return `load_result` from
+    /// every `load_events` call.
+    ///
+    /// # Errors
+    ///
+    /// If `load_result` is an `Err`, the error message is stored and returned
+    /// on every `load_events` call. Use `FailingEventRepository` instead for
+    /// the common "always fail" pattern.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `load_result` is an `Err` — use `FailingEventRepository` for
+    /// error scenarios.
     #[must_use]
     pub fn new(load_result: Result<Vec<StoredEvent>, DomainError>) -> Self {
         Self {
-            load_result: Mutex::new(Some(load_result)),
+            load_result: Mutex::new(load_result.expect(
+                "RecordingEventRepository::new does not accept Err; use FailingEventRepository",
+            )),
             appended: Mutex::new(Vec::new()),
         }
     }
@@ -33,7 +45,6 @@ impl RecordingEventRepository {
     /// # Panics
     ///
     /// Panics if the internal mutex is poisoned.
-    #[must_use]
     pub fn appended_events(&self) -> Vec<(Uuid, i64, Vec<StoredEvent>)> {
         self.appended.lock().unwrap().clone()
     }
@@ -42,11 +53,7 @@ impl RecordingEventRepository {
 #[async_trait]
 impl EventRepository for RecordingEventRepository {
     async fn load_events(&self, _aggregate_id: Uuid) -> Result<Vec<StoredEvent>, DomainError> {
-        self.load_result
-            .lock()
-            .unwrap()
-            .take()
-            .unwrap_or(Ok(Vec::new()))
+        Ok(self.load_result.lock().unwrap().clone())
     }
 
     async fn append_events(
