@@ -297,8 +297,8 @@ mod tests {
             occurred_at: fixed_now,
         }];
         let repo = RecordingEventRepository::new(Ok(existing));
-        // RNG: d20 roll = 15, then two values for check_id
-        let rng: Mutex<SequenceRng> = Mutex::new(SequenceRng::new(vec![15, 42, 99]));
+        // RNG: d20 roll = 15, then four values for check_id
+        let rng: Mutex<SequenceRng> = Mutex::new(SequenceRng::new(vec![15, 42, 99, 7, 13]));
         let rng_ref: &Mutex<dyn DeterministicRng + Send> = &rng;
 
         let command = ResolveCheck {

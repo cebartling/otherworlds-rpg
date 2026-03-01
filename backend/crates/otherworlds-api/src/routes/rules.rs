@@ -393,9 +393,9 @@ mod tests {
         let resolution_id = Uuid::new_v4();
         let repo =
             RecordingEventRepository::new(Ok(vec![intent_declared_stored_event(resolution_id)]));
-        // RNG: d20 roll, then two values for check_id
+        // RNG: d20 roll, then four values for check_id
         let rng: Arc<Mutex<dyn DeterministicRng + Send>> =
-            Arc::new(Mutex::new(SequenceRng::new(vec![15, 42, 99])));
+            Arc::new(Mutex::new(SequenceRng::new(vec![15, 42, 99, 7, 13])));
         let app = router().with_state(app_state_with_rng(Arc::new(repo), rng));
 
         let body = serde_json::json!({ "resolution_id": resolution_id });

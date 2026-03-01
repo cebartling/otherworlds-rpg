@@ -138,12 +138,8 @@ impl Resolution {
     ///
     /// # Errors
     ///
-    /// Returns `DomainError::Validation` if not in `IntentDeclared` phase.
-    ///
-    /// # Panics
-    ///
-    /// Panics if called without a prior `IntentDeclared` event (invariant
-    /// guaranteed by phase validation).
+    /// Returns `DomainError::Validation` if not in `IntentDeclared` phase
+    /// or if intent state is missing.
     #[allow(clippy::cast_possible_wrap)]
     pub fn resolve_check(
         &mut self,
@@ -157,20 +153,21 @@ impl Resolution {
             ));
         }
 
-        let intent = self
-            .intent
-            .as_ref()
-            .expect("intent must be set in IntentDeclared phase");
+        let intent = self.intent.as_ref().ok_or_else(|| {
+            DomainError::Validation("missing intent in IntentDeclared phase".to_owned())
+        })?;
 
         let natural_roll = rng.next_u32_range(1, 20);
         let total = natural_roll as i32 + intent.modifier;
         let outcome = determine_outcome(natural_roll, total, intent.difficulty_class);
 
-        // Generate a deterministic check_id from two RNG-produced u32 halves.
-        let hi = u64::from(rng.next_u32_range(0, u32::MAX));
-        let lo = u64::from(rng.next_u32_range(0, u32::MAX));
-        let bits = (hi << 32) | lo;
-        let check_id = Uuid::from_u64_pair(bits, bits.wrapping_mul(0x517c_c1b7_2722_0a95));
+        // Generate a deterministic check_id from four RNG-produced u32 values
+        // to fill all 128 bits of the UUID.
+        let a = u64::from(rng.next_u32_range(0, u32::MAX));
+        let b = u64::from(rng.next_u32_range(0, u32::MAX));
+        let c = u64::from(rng.next_u32_range(0, u32::MAX));
+        let d = u64::from(rng.next_u32_range(0, u32::MAX));
+        let check_id = Uuid::from_u64_pair((a << 32) | b, (c << 32) | d);
 
         let event = RulesEvent {
             metadata: EventMetadata {
@@ -548,8 +545,8 @@ mod tests {
             modifier: 3,
         });
 
-        // RNG: first value is the d20 roll (15), next two are for check_id generation
-        let mut rng = SequenceRng::new(vec![15, 42, 99]);
+        // RNG: first value is the d20 roll (15), next four are for check_id generation
+        let mut rng = SequenceRng::new(vec![15, 42, 99, 7, 13]);
 
         let result = resolution.resolve_check(correlation_id, &clock, &mut rng);
         assert!(result.is_ok());
@@ -609,7 +606,7 @@ mod tests {
             difficulty_class: 5,
             modifier: 10,
         });
-        let mut rng = SequenceRng::new(vec![1, 42, 99]);
+        let mut rng = SequenceRng::new(vec![1, 42, 99, 7, 13]);
 
         resolution
             .resolve_check(Uuid::new_v4(), &fixed_clock(), &mut rng)
@@ -636,7 +633,7 @@ mod tests {
             difficulty_class: 30,
             modifier: -5,
         });
-        let mut rng = SequenceRng::new(vec![20, 42, 99]);
+        let mut rng = SequenceRng::new(vec![20, 42, 99, 7, 13]);
 
         resolution
             .resolve_check(Uuid::new_v4(), &fixed_clock(), &mut rng)
@@ -664,7 +661,7 @@ mod tests {
             modifier: 3,
         });
         // Roll 15 + modifier 3 = total 18, DC 15 → Success
-        let mut rng = SequenceRng::new(vec![15, 42, 99]);
+        let mut rng = SequenceRng::new(vec![15, 42, 99, 7, 13]);
 
         resolution
             .resolve_check(Uuid::new_v4(), &fixed_clock(), &mut rng)
@@ -692,7 +689,7 @@ mod tests {
             modifier: 2,
         });
         // Roll 8 + modifier 2 = total 10, DC 15 → 10 >= 15-5 → PartialSuccess
-        let mut rng = SequenceRng::new(vec![8, 42, 99]);
+        let mut rng = SequenceRng::new(vec![8, 42, 99, 7, 13]);
 
         resolution
             .resolve_check(Uuid::new_v4(), &fixed_clock(), &mut rng)
@@ -720,7 +717,7 @@ mod tests {
             modifier: 1,
         });
         // Roll 3 + modifier 1 = total 4, DC 15 → 4 < 10 → Failure
-        let mut rng = SequenceRng::new(vec![3, 42, 99]);
+        let mut rng = SequenceRng::new(vec![3, 42, 99, 7, 13]);
 
         resolution
             .resolve_check(Uuid::new_v4(), &fixed_clock(), &mut rng)
@@ -748,7 +745,7 @@ mod tests {
             modifier: 5,
         });
         // Roll 10 + modifier 5 = total 15, DC 5 → 15 >= 5+10 → CriticalSuccess
-        let mut rng = SequenceRng::new(vec![10, 42, 99]);
+        let mut rng = SequenceRng::new(vec![10, 42, 99, 7, 13]);
 
         resolution
             .resolve_check(Uuid::new_v4(), &fixed_clock(), &mut rng)
@@ -953,7 +950,7 @@ mod tests {
         resolution.clear_uncommitted_events();
 
         // Phase 2: Resolve check
-        let mut rng = SequenceRng::new(vec![15, 42, 99]);
+        let mut rng = SequenceRng::new(vec![15, 42, 99, 7, 13]);
         resolution
             .resolve_check(Uuid::new_v4(), &clock, &mut rng)
             .unwrap();

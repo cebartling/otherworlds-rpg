@@ -108,7 +108,7 @@ mod tests {
     #[test]
     fn test_sequence_rng_clamps_below_min() {
         let mut rng = SequenceRng::new(vec![2]);
-        // Value 2 should be clamped up to min = 5 when range is [5, 10).
+        // Value 2 should be clamped up to min = 5 when range is [5, 10].
         assert_eq!(rng.next_u32_range(5, 10), 5);
     }
 
