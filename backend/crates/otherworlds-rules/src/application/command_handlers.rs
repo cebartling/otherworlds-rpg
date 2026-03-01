@@ -13,7 +13,7 @@ use otherworlds_core::repository::{EventRepository, StoredEvent};
 use otherworlds_core::rng::DeterministicRng;
 use uuid::Uuid;
 
-use crate::domain::aggregates::Resolution;
+use crate::domain::aggregates::{DeclareIntentParams, Resolution};
 use crate::domain::commands::{DeclareIntent, EffectSpec, ProduceEffects, ResolveCheck};
 use crate::domain::events::{RulesEvent, RulesEventKind};
 
@@ -77,12 +77,14 @@ pub async fn handle_declare_intent(
     let mut resolution = reconstitute(command.resolution_id, &existing_events)?;
 
     resolution.declare_intent(
-        command.intent_id,
-        command.action_type.clone(),
-        command.skill.clone(),
-        command.target_id,
-        command.difficulty_class,
-        command.modifier,
+        DeclareIntentParams {
+            intent_id: command.intent_id,
+            action_type: command.action_type.clone(),
+            skill: command.skill.clone(),
+            target_id: command.target_id,
+            difficulty_class: command.difficulty_class,
+            modifier: command.modifier,
+        },
         command.correlation_id,
         clock,
     )?;
@@ -440,7 +442,12 @@ mod tests {
 
         let resolution = reconstitute(resolution_id, &events).unwrap();
         assert_eq!(resolution.version, 1);
-        assert!(resolution.intent.is_some());
+        let intent = resolution.intent.as_ref().unwrap();
+        assert_eq!(intent.intent_id, intent_id);
+        assert_eq!(intent.action_type, "attack");
+        assert!(intent.skill.is_none());
+        assert_eq!(intent.difficulty_class, 12);
+        assert_eq!(intent.modifier, 2);
     }
 
     #[tokio::test]
@@ -491,7 +498,11 @@ mod tests {
 
         let resolution = reconstitute(resolution_id, &events).unwrap();
         assert_eq!(resolution.version, 2);
-        assert!(resolution.check_result.is_some());
+        let check = resolution.check_result.as_ref().unwrap();
+        assert_eq!(check.natural_roll, 18);
+        assert_eq!(check.total, 21);
+        assert_eq!(check.difficulty_class, 15);
+        assert_eq!(check.outcome, CheckOutcome::Success);
     }
 
     #[tokio::test]
@@ -563,5 +574,7 @@ mod tests {
         let resolution = reconstitute(resolution_id, &events).unwrap();
         assert_eq!(resolution.version, 3);
         assert_eq!(resolution.effects.len(), 1);
+        assert_eq!(resolution.effects[0].effect_type, "damage");
+        assert_eq!(resolution.effects[0].payload["amount"], 8);
     }
 }

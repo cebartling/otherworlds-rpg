@@ -43,6 +43,23 @@ pub(crate) struct CheckResult {
     pub outcome: CheckOutcome,
 }
 
+/// Parameters for declaring a player intent.
+#[derive(Debug, Clone)]
+pub struct DeclareIntentParams {
+    /// The intent identifier.
+    pub intent_id: Uuid,
+    /// The type of action (e.g., "`skill_check`", "`attack`", "`save`").
+    pub action_type: String,
+    /// Optional skill being used.
+    pub skill: Option<String>,
+    /// Optional target of the action.
+    pub target_id: Option<Uuid>,
+    /// The difficulty class to beat.
+    pub difficulty_class: i32,
+    /// The modifier applied to the roll.
+    pub modifier: i32,
+}
+
 /// The aggregate root for a resolution.
 #[derive(Debug)]
 pub struct Resolution {
@@ -77,6 +94,17 @@ impl Resolution {
         }
     }
 
+    /// Returns the current phase as a string.
+    #[must_use]
+    pub fn phase_name(&self) -> &'static str {
+        match self.phase {
+            ResolutionPhase::Created => "created",
+            ResolutionPhase::IntentDeclared => "intent_declared",
+            ResolutionPhase::CheckResolved => "check_resolved",
+            ResolutionPhase::EffectsProduced => "effects_produced",
+        }
+    }
+
     /// Returns the next sequence number for a new event.
     #[allow(clippy::cast_possible_wrap)]
     fn next_sequence_number(&self) -> i64 {
@@ -88,15 +116,9 @@ impl Resolution {
     /// # Errors
     ///
     /// Returns `DomainError::Validation` if not in `Created` phase.
-    #[allow(clippy::too_many_arguments)]
     pub fn declare_intent(
         &mut self,
-        intent_id: Uuid,
-        action_type: String,
-        skill: Option<String>,
-        target_id: Option<Uuid>,
-        difficulty_class: i32,
-        modifier: i32,
+        params: DeclareIntentParams,
         correlation_id: Uuid,
         clock: &dyn Clock,
     ) -> Result<(), DomainError> {
@@ -118,12 +140,12 @@ impl Resolution {
             },
             kind: RulesEventKind::IntentDeclared(IntentDeclared {
                 resolution_id: self.id,
-                intent_id,
-                action_type,
-                skill,
-                target_id,
-                difficulty_class,
-                modifier,
+                intent_id: params.intent_id,
+                action_type: params.action_type,
+                skill: params.skill,
+                target_id: params.target_id,
+                difficulty_class: params.difficulty_class,
+                modifier: params.modifier,
             }),
         };
 
@@ -307,12 +329,14 @@ mod tests {
         let mut resolution = Resolution::new(resolution_id);
 
         let result = resolution.declare_intent(
-            intent_id,
-            "skill_check".to_owned(),
-            Some("perception".to_owned()),
-            None,
-            15,
-            3,
+            DeclareIntentParams {
+                intent_id,
+                action_type: "skill_check".to_owned(),
+                skill: Some("perception".to_owned()),
+                target_id: None,
+                difficulty_class: 15,
+                modifier: 3,
+            },
             correlation_id,
             &clock,
         );
@@ -334,12 +358,14 @@ mod tests {
         resolution.phase = ResolutionPhase::IntentDeclared;
 
         let result = resolution.declare_intent(
-            Uuid::new_v4(),
-            "attack".to_owned(),
-            None,
-            None,
-            12,
-            0,
+            DeclareIntentParams {
+                intent_id: Uuid::new_v4(),
+                action_type: "attack".to_owned(),
+                skill: None,
+                target_id: None,
+                difficulty_class: 12,
+                modifier: 0,
+            },
             Uuid::new_v4(),
             &fixed_clock(),
         );
@@ -359,12 +385,14 @@ mod tests {
         resolution.phase = ResolutionPhase::CheckResolved;
 
         let result = resolution.declare_intent(
-            Uuid::new_v4(),
-            "save".to_owned(),
-            None,
-            None,
-            10,
-            2,
+            DeclareIntentParams {
+                intent_id: Uuid::new_v4(),
+                action_type: "save".to_owned(),
+                skill: None,
+                target_id: None,
+                difficulty_class: 10,
+                modifier: 2,
+            },
             Uuid::new_v4(),
             &fixed_clock(),
         );
@@ -452,12 +480,14 @@ mod tests {
 
         resolution
             .declare_intent(
-                Uuid::new_v4(),
-                "skill_check".to_owned(),
-                None,
-                None,
-                15,
-                0,
+                DeclareIntentParams {
+                    intent_id: Uuid::new_v4(),
+                    action_type: "skill_check".to_owned(),
+                    skill: None,
+                    target_id: None,
+                    difficulty_class: 15,
+                    modifier: 0,
+                },
                 Uuid::new_v4(),
                 &clock,
             )
@@ -798,6 +828,54 @@ mod tests {
         assert_eq!(result.outcome, CheckOutcome::Success);
     }
 
+    #[test]
+    fn test_resolve_check_after_declare_intent_and_apply() {
+        let resolution_id = Uuid::new_v4();
+        let clock = fixed_clock();
+        let mut resolution = Resolution::new(resolution_id);
+
+        // Declare intent via the domain method
+        resolution
+            .declare_intent(
+                DeclareIntentParams {
+                    intent_id: Uuid::new_v4(),
+                    action_type: "skill_check".to_owned(),
+                    skill: Some("perception".to_owned()),
+                    target_id: None,
+                    difficulty_class: 15,
+                    modifier: 3,
+                },
+                Uuid::new_v4(),
+                &clock,
+            )
+            .unwrap();
+
+        // Apply and clear to simulate persistence round-trip
+        for event in resolution.uncommitted_events().to_vec() {
+            resolution.apply(&event);
+        }
+        resolution.clear_uncommitted_events();
+
+        assert_eq!(resolution.phase, ResolutionPhase::IntentDeclared);
+
+        // Resolve check — roll 15 + modifier 3 = total 18, DC 15 → Success
+        let mut rng = SequenceRng::new(vec![15, 42, 99, 7, 13]);
+        resolution
+            .resolve_check(Uuid::new_v4(), &clock, &mut rng)
+            .unwrap();
+
+        let events = resolution.uncommitted_events();
+        assert_eq!(events.len(), 1);
+        match &events[0].kind {
+            RulesEventKind::CheckResolved(payload) => {
+                assert_eq!(payload.natural_roll, 15);
+                assert_eq!(payload.total, 18);
+                assert_eq!(payload.outcome, CheckOutcome::Success);
+            }
+            other => panic!("expected CheckResolved, got {other:?}"),
+        }
+    }
+
     // --- produce_effects tests ---
 
     #[test]
@@ -932,12 +1010,14 @@ mod tests {
         // Phase 1: Declare intent
         resolution
             .declare_intent(
-                Uuid::new_v4(),
-                "skill_check".to_owned(),
-                Some("athletics".to_owned()),
-                None,
-                15,
-                3,
+                DeclareIntentParams {
+                    intent_id: Uuid::new_v4(),
+                    action_type: "skill_check".to_owned(),
+                    skill: Some("athletics".to_owned()),
+                    target_id: None,
+                    difficulty_class: 15,
+                    modifier: 3,
+                },
                 Uuid::new_v4(),
                 &clock,
             )

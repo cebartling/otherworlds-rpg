@@ -1,5 +1,7 @@
 //! Domain events for the Rules & Resolution context.
 
+use std::fmt;
+
 use otherworlds_core::event::{DomainEvent, EventMetadata};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -17,6 +19,18 @@ pub enum CheckOutcome {
     Success,
     /// Natural 20 or total >= DC+10.
     CriticalSuccess,
+}
+
+impl fmt::Display for CheckOutcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::CriticalFailure => write!(f, "critical_failure"),
+            Self::Failure => write!(f, "failure"),
+            Self::PartialSuccess => write!(f, "partial_success"),
+            Self::Success => write!(f, "success"),
+            Self::CriticalSuccess => write!(f, "critical_success"),
+        }
+    }
 }
 
 /// Determines the outcome of a d20 check.
@@ -53,7 +67,7 @@ pub struct IntentDeclared {
     pub resolution_id: Uuid,
     /// The intent identifier.
     pub intent_id: Uuid,
-    /// The type of action (e.g., "`skill_check`", "attack", "save").
+    /// The type of action (e.g., "`skill_check`", "`attack`", "`save`").
     pub action_type: String,
     /// Optional skill being used (e.g., "perception", "athletics").
     pub skill: Option<String>,
@@ -87,7 +101,7 @@ pub struct CheckResolved {
 /// A single campaign-independent effect.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResolvedEffect {
-    /// The type of effect (e.g., "damage", "heal", "`status_apply`").
+    /// The type of effect (e.g., "`damage`", "`heal`", "`status_apply`").
     pub effect_type: String,
     /// Optional target of the effect.
     pub target_id: Option<Uuid>,

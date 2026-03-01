@@ -9,7 +9,6 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::application::command_handlers;
-use crate::domain::events::CheckOutcome;
 
 /// Read-only view of a resolution's declared intent.
 #[derive(Debug, Serialize)]
@@ -73,17 +72,6 @@ pub struct ResolutionView {
     pub version: i64,
 }
 
-/// Converts a `CheckOutcome` to its string representation.
-fn outcome_to_string(outcome: CheckOutcome) -> String {
-    match outcome {
-        CheckOutcome::CriticalFailure => "critical_failure".to_owned(),
-        CheckOutcome::Failure => "failure".to_owned(),
-        CheckOutcome::PartialSuccess => "partial_success".to_owned(),
-        CheckOutcome::Success => "success".to_owned(),
-        CheckOutcome::CriticalSuccess => "critical_success".to_owned(),
-    }
-}
-
 /// Retrieves a resolution by its aggregate ID.
 ///
 /// # Errors
@@ -100,12 +88,7 @@ pub async fn get_resolution_by_id(
     }
     let resolution = command_handlers::reconstitute(resolution_id, &stored_events)?;
 
-    let phase = match resolution.phase {
-        crate::domain::aggregates::ResolutionPhase::Created => "created",
-        crate::domain::aggregates::ResolutionPhase::IntentDeclared => "intent_declared",
-        crate::domain::aggregates::ResolutionPhase::CheckResolved => "check_resolved",
-        crate::domain::aggregates::ResolutionPhase::EffectsProduced => "effects_produced",
-    };
+    let phase = resolution.phase_name().to_owned();
 
     let intent = resolution.intent.map(|i| IntentView {
         intent_id: i.intent_id,
@@ -122,7 +105,7 @@ pub async fn get_resolution_by_id(
         modifier: c.modifier,
         total: c.total,
         difficulty_class: c.difficulty_class,
-        outcome: outcome_to_string(c.outcome),
+        outcome: c.outcome.to_string(),
     });
 
     let effects = resolution
@@ -137,7 +120,7 @@ pub async fn get_resolution_by_id(
 
     Ok(ResolutionView {
         resolution_id,
-        phase: phase.to_owned(),
+        phase,
         intent,
         check_result,
         effects,

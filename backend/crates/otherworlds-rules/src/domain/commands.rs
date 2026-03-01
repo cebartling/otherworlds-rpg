@@ -14,7 +14,7 @@ pub struct DeclareIntent {
     pub resolution_id: Uuid,
     /// The intent identifier.
     pub intent_id: Uuid,
-    /// The type of action (e.g., "`skill_check`", "attack", "save").
+    /// The type of action (e.g., "`skill_check`", "`attack`", "`save`").
     pub action_type: String,
     /// Optional skill being used.
     pub skill: Option<String>,
@@ -58,7 +58,7 @@ impl Command for ResolveCheck {
 /// Specification for a single effect to produce.
 #[derive(Debug, Clone)]
 pub struct EffectSpec {
-    /// The type of effect (e.g., "damage", "heal", "`status_apply`").
+    /// The type of effect (e.g., "`damage`", "`heal`", "`status_apply`").
     pub effect_type: String,
     /// Optional target of the effect.
     pub target_id: Option<Uuid>,

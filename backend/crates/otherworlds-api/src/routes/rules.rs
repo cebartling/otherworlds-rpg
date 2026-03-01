@@ -1,6 +1,7 @@
 //! Routes for the Rules & Resolution bounded context.
 
 use axum::extract::{Path, State};
+use axum::http::HeaderMap;
 use axum::{
     Json, Router,
     routing::{get, post},
@@ -16,6 +17,16 @@ use otherworlds_rules::domain::commands;
 use crate::error::ApiError;
 use crate::state::AppState;
 
+/// Extracts a correlation ID from the `X-Correlation-ID` header, falling back
+/// to a new v4 UUID if the header is absent or not a valid UUID.
+fn extract_correlation_id(headers: &HeaderMap) -> Uuid {
+    headers
+        .get("x-correlation-id")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| Uuid::parse_str(s).ok())
+        .unwrap_or_else(Uuid::new_v4)
+}
+
 /// Request body for POST /declare-intent.
 #[derive(Debug, Deserialize)]
 pub struct DeclareIntentRequest {
@@ -23,7 +34,7 @@ pub struct DeclareIntentRequest {
     pub resolution_id: Uuid,
     /// The intent identifier.
     pub intent_id: Uuid,
-    /// The type of action (e.g., "`skill_check`", "attack", "save").
+    /// The type of action (e.g., "`skill_check`", "`attack`", "`save`").
     pub action_type: String,
     /// Optional skill being used.
     pub skill: Option<String>,
@@ -45,7 +56,7 @@ pub struct ResolveCheckRequest {
 /// Request body for a single effect specification.
 #[derive(Debug, Deserialize)]
 pub struct EffectSpecRequest {
-    /// The type of effect (e.g., "damage", "heal", "`status_apply`").
+    /// The type of effect (e.g., "`damage`", "`heal`", "`status_apply`").
     pub effect_type: String,
     /// Optional target of the effect.
     pub target_id: Option<Uuid>,
@@ -70,13 +81,14 @@ pub struct CommandResponse {
 }
 
 /// POST /declare-intent
-#[instrument(skip(state, request), fields(resolution_id = %request.resolution_id))]
+#[instrument(skip(state, headers, request), fields(resolution_id = %request.resolution_id))]
 async fn declare_intent(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(request): Json<DeclareIntentRequest>,
 ) -> Result<Json<CommandResponse>, ApiError> {
     let command = commands::DeclareIntent {
-        correlation_id: Uuid::new_v4(),
+        correlation_id: extract_correlation_id(&headers),
         resolution_id: request.resolution_id,
         intent_id: request.intent_id,
         action_type: request.action_type,
@@ -101,13 +113,14 @@ async fn declare_intent(
 }
 
 /// POST /resolve-check
-#[instrument(skip(state, request), fields(resolution_id = %request.resolution_id))]
+#[instrument(skip(state, headers, request), fields(resolution_id = %request.resolution_id))]
 async fn resolve_check(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(request): Json<ResolveCheckRequest>,
 ) -> Result<Json<CommandResponse>, ApiError> {
     let command = commands::ResolveCheck {
-        correlation_id: Uuid::new_v4(),
+        correlation_id: extract_correlation_id(&headers),
         resolution_id: request.resolution_id,
     };
 
@@ -127,9 +140,10 @@ async fn resolve_check(
 }
 
 /// POST /produce-effects
-#[instrument(skip(state, request), fields(resolution_id = %request.resolution_id))]
+#[instrument(skip(state, headers, request), fields(resolution_id = %request.resolution_id))]
 async fn produce_effects(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(request): Json<ProduceEffectsRequest>,
 ) -> Result<Json<CommandResponse>, ApiError> {
     let effects = request
@@ -143,7 +157,7 @@ async fn produce_effects(
         .collect();
 
     let command = commands::ProduceEffects {
-        correlation_id: Uuid::new_v4(),
+        correlation_id: extract_correlation_id(&headers),
         resolution_id: request.resolution_id,
         effects,
     };
@@ -204,8 +218,10 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use tower::ServiceExt;
 
+    const TEST_DATABASE_URL: &str = "postgres://localhost/test";
+
     fn app_state_with(event_repository: Arc<dyn EventRepository>) -> AppState {
-        let pool = PgPool::connect_lazy("postgres://localhost/test").unwrap();
+        let pool = PgPool::connect_lazy(TEST_DATABASE_URL).unwrap();
         let clock: Arc<dyn Clock + Send + Sync> = Arc::new(FixedClock(Utc::now()));
         let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         AppState::new(pool, clock, rng, event_repository)
@@ -215,7 +231,7 @@ mod tests {
         event_repository: Arc<dyn EventRepository>,
         rng: Arc<Mutex<dyn DeterministicRng + Send>>,
     ) -> AppState {
-        let pool = PgPool::connect_lazy("postgres://localhost/test").unwrap();
+        let pool = PgPool::connect_lazy(TEST_DATABASE_URL).unwrap();
         let clock: Arc<dyn Clock + Send + Sync> = Arc::new(FixedClock(Utc::now()));
         AppState::new(pool, clock, rng, event_repository)
     }
