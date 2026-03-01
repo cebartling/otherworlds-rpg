@@ -42,10 +42,9 @@ pub(crate) fn reconstitute(
 ) -> Result<Resolution, DomainError> {
     let mut resolution = Resolution::new(resolution_id);
     for stored in existing_events {
-        let kind: RulesEventKind =
-            serde_json::from_value(stored.payload.clone()).map_err(|e| {
-                DomainError::Infrastructure(format!("event deserialization failed: {e}"))
-            })?;
+        let kind: RulesEventKind = serde_json::from_value(stored.payload.clone()).map_err(|e| {
+            DomainError::Infrastructure(format!("event deserialization failed: {e}"))
+        })?;
         let event = RulesEvent {
             metadata: otherworlds_core::event::EventMetadata {
                 event_id: stored.event_id,
