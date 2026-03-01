@@ -40,4 +40,8 @@ pub trait EventRepository: Send + Sync + std::fmt::Debug {
         expected_version: i64,
         events: &[StoredEvent],
     ) -> Result<(), DomainError>;
+
+    /// List distinct aggregate IDs that have at least one event matching the
+    /// given event types.
+    async fn list_aggregate_ids(&self, event_types: &[&str]) -> Result<Vec<Uuid>, DomainError>;
 }

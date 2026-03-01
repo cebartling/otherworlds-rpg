@@ -9,10 +9,19 @@ use uuid::Uuid;
 
 /// Helper to build a `StoredEvent` with sensible defaults.
 fn make_stored_event(aggregate_id: Uuid, sequence_number: i64) -> StoredEvent {
+    make_stored_event_with_type(aggregate_id, sequence_number, "TestEvent")
+}
+
+/// Helper to build a `StoredEvent` with a custom event type.
+fn make_stored_event_with_type(
+    aggregate_id: Uuid,
+    sequence_number: i64,
+    event_type: &str,
+) -> StoredEvent {
     StoredEvent {
         event_id: Uuid::new_v4(),
         aggregate_id,
-        event_type: "TestEvent".to_string(),
+        event_type: event_type.to_string(),
         payload: serde_json::json!({"key": "value"}),
         sequence_number,
         correlation_id: Uuid::new_v4(),
@@ -276,4 +285,150 @@ async fn test_timestamp_precision(pool: PgPool) {
     let original_micros = original_timestamp.timestamp_micros();
     let loaded_micros = loaded[0].occurred_at.timestamp_micros();
     assert_eq!(original_micros, loaded_micros);
+}
+
+// --- list_aggregate_ids ---
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn test_list_aggregate_ids_returns_empty_for_no_matching_events(pool: PgPool) {
+    let repo = PgEventRepository::new(pool);
+
+    let ids = repo
+        .list_aggregate_ids(&["nonexistent.event_type"])
+        .await
+        .unwrap();
+
+    assert!(ids.is_empty());
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn test_list_aggregate_ids_returns_matching_aggregates(pool: PgPool) {
+    let repo = PgEventRepository::new(pool);
+    let agg_a = Uuid::new_v4();
+    let agg_b = Uuid::new_v4();
+
+    repo.append_events(
+        agg_a,
+        0,
+        &[make_stored_event_with_type(
+            agg_a,
+            1,
+            "narrative.beat_advanced",
+        )],
+    )
+    .await
+    .unwrap();
+    repo.append_events(
+        agg_b,
+        0,
+        &[make_stored_event_with_type(
+            agg_b,
+            1,
+            "rules.intent_declared",
+        )],
+    )
+    .await
+    .unwrap();
+
+    let ids = repo
+        .list_aggregate_ids(&["narrative.beat_advanced"])
+        .await
+        .unwrap();
+
+    assert_eq!(ids.len(), 1);
+    assert!(ids.contains(&agg_a));
+    assert!(!ids.contains(&agg_b));
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn test_list_aggregate_ids_returns_distinct_ids(pool: PgPool) {
+    let repo = PgEventRepository::new(pool);
+    let agg = Uuid::new_v4();
+
+    // Append two events of the same type for the same aggregate.
+    repo.append_events(
+        agg,
+        0,
+        &[
+            make_stored_event_with_type(agg, 1, "narrative.beat_advanced"),
+            make_stored_event_with_type(agg, 2, "narrative.beat_advanced"),
+        ],
+    )
+    .await
+    .unwrap();
+
+    let ids = repo
+        .list_aggregate_ids(&["narrative.beat_advanced"])
+        .await
+        .unwrap();
+
+    assert_eq!(ids.len(), 1);
+    assert_eq!(ids[0], agg);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn test_list_aggregate_ids_filters_across_contexts(pool: PgPool) {
+    let repo = PgEventRepository::new(pool);
+    let narrative_agg = Uuid::new_v4();
+    let rules_agg = Uuid::new_v4();
+    let world_agg = Uuid::new_v4();
+
+    repo.append_events(
+        narrative_agg,
+        0,
+        &[make_stored_event_with_type(
+            narrative_agg,
+            1,
+            "narrative.beat_advanced",
+        )],
+    )
+    .await
+    .unwrap();
+    repo.append_events(
+        rules_agg,
+        0,
+        &[make_stored_event_with_type(
+            rules_agg,
+            1,
+            "rules.intent_declared",
+        )],
+    )
+    .await
+    .unwrap();
+    repo.append_events(
+        world_agg,
+        0,
+        &[make_stored_event_with_type(
+            world_agg,
+            1,
+            "world_state.flag_set",
+        )],
+    )
+    .await
+    .unwrap();
+
+    // Query for narrative and rules, should not include world_state.
+    let ids = repo
+        .list_aggregate_ids(&["narrative.beat_advanced", "rules.intent_declared"])
+        .await
+        .unwrap();
+
+    assert_eq!(ids.len(), 2);
+    assert!(ids.contains(&narrative_agg));
+    assert!(ids.contains(&rules_agg));
+    assert!(!ids.contains(&world_agg));
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn test_list_aggregate_ids_returns_empty_for_empty_event_types(pool: PgPool) {
+    let repo = PgEventRepository::new(pool);
+    let agg = Uuid::new_v4();
+
+    repo.append_events(agg, 0, &[make_stored_event(agg, 1)])
+        .await
+        .unwrap();
+
+    let ids = repo.list_aggregate_ids(&[]).await.unwrap();
+
+    assert!(ids.is_empty());
 }

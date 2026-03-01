@@ -27,6 +27,52 @@ pub struct WorldSnapshotView {
     pub version: i64,
 }
 
+/// Event types used by the World State context.
+const EVENT_TYPES: &[&str] = &[
+    "world_state.world_fact_changed",
+    "world_state.flag_set",
+    "world_state.disposition_updated",
+];
+
+/// Summary view for listing world snapshots.
+#[derive(Debug, Serialize)]
+pub struct WorldSnapshotSummary {
+    /// The world snapshot identifier.
+    pub world_id: Uuid,
+    /// Number of facts applied.
+    pub fact_count: usize,
+    /// Number of flags set.
+    pub flag_count: usize,
+    /// Current version (event count).
+    pub version: i64,
+}
+
+/// Lists all world snapshots.
+///
+/// # Errors
+///
+/// Returns `DomainError::Infrastructure` if querying or deserialization fails.
+pub async fn list_world_snapshots(
+    repo: &dyn EventRepository,
+) -> Result<Vec<WorldSnapshotSummary>, DomainError> {
+    let ids = repo.list_aggregate_ids(EVENT_TYPES).await?;
+    let mut summaries = Vec::with_capacity(ids.len());
+    for id in ids {
+        let stored_events = repo.load_events(id).await?;
+        if stored_events.is_empty() {
+            continue;
+        }
+        let snapshot = command_handlers::reconstitute(id, &stored_events)?;
+        summaries.push(WorldSnapshotSummary {
+            world_id: id,
+            fact_count: snapshot.facts.len(),
+            flag_count: snapshot.flags.len(),
+            version: snapshot.version,
+        });
+    }
+    Ok(summaries)
+}
+
 /// Retrieves a world snapshot by its aggregate ID.
 ///
 /// # Errors
@@ -58,7 +104,7 @@ mod tests {
     use otherworlds_core::repository::StoredEvent;
     use uuid::Uuid;
 
-    use crate::application::query_handlers::get_world_snapshot_by_id;
+    use crate::application::query_handlers::{get_world_snapshot_by_id, list_world_snapshots};
     use crate::domain::events::{FlagSet, WorldFactChanged, WorldStateEventKind};
     use otherworlds_test_support::{EmptyEventRepository, RecordingEventRepository};
 
@@ -129,5 +175,46 @@ mod tests {
             DomainError::AggregateNotFound(id) => assert_eq!(id, world_id),
             other => panic!("expected AggregateNotFound, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_list_world_snapshots_returns_empty_when_no_aggregates() {
+        let repo = EmptyEventRepository;
+
+        let result = list_world_snapshots(&repo).await.unwrap();
+
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_list_world_snapshots_returns_summaries() {
+        let world_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+
+        let events = vec![StoredEvent {
+            event_id: Uuid::new_v4(),
+            aggregate_id: world_id,
+            event_type: "world_state.world_fact_changed".to_owned(),
+            payload: serde_json::to_value(WorldStateEventKind::WorldFactChanged(
+                WorldFactChanged {
+                    world_id,
+                    fact_key: "quest_complete".to_owned(),
+                },
+            ))
+            .unwrap(),
+            sequence_number: 1,
+            correlation_id: Uuid::new_v4(),
+            causation_id: Uuid::new_v4(),
+            occurred_at: fixed_now,
+        }];
+        let repo = RecordingEventRepository::with_aggregate_ids(Ok(events), vec![world_id]);
+
+        let result = list_world_snapshots(&repo).await.unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].world_id, world_id);
+        assert_eq!(result[0].fact_count, 1);
+        assert_eq!(result[0].flag_count, 0);
+        assert_eq!(result[0].version, 1);
     }
 }

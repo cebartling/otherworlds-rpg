@@ -98,3 +98,30 @@ async fn test_character_get_nonexistent_returns_404(pool: PgPool) {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(json["error"], "aggregate_not_found");
 }
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn test_character_list_includes_created_character(pool: PgPool) {
+    // Create a character
+    let app = common::build_test_app(pool.clone());
+    let (status, json) = common::post_json(
+        app,
+        "/api/v1/characters/create",
+        &serde_json::json!({ "name": "Alaric" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let event_id: Uuid = json["event_ids"][0].as_str().unwrap().parse().unwrap();
+    let character_id = aggregate_id_from_event(&pool, event_id).await;
+
+    // GET /api/v1/characters — list should include the character
+    let app = common::build_test_app(pool);
+    let (status, json) = common::get_json(app, "/api/v1/characters").await;
+
+    assert_eq!(status, StatusCode::OK);
+    let characters = json.as_array().unwrap();
+    assert!(
+        characters
+            .iter()
+            .any(|c| c["character_id"] == character_id.to_string())
+    );
+}

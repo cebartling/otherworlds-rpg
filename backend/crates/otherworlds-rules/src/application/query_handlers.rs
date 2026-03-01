@@ -72,6 +72,49 @@ pub struct ResolutionView {
     pub version: i64,
 }
 
+/// Event types used by the Rules & Resolution context.
+const EVENT_TYPES: &[&str] = &[
+    "rules.intent_declared",
+    "rules.check_resolved",
+    "rules.effects_produced",
+];
+
+/// Summary view for listing resolutions.
+#[derive(Debug, Serialize)]
+pub struct ResolutionSummary {
+    /// The resolution identifier.
+    pub resolution_id: Uuid,
+    /// Current phase as a string.
+    pub phase: String,
+    /// Current version (event count).
+    pub version: i64,
+}
+
+/// Lists all resolutions.
+///
+/// # Errors
+///
+/// Returns `DomainError::Infrastructure` if querying or deserialization fails.
+pub async fn list_resolutions(
+    repo: &dyn EventRepository,
+) -> Result<Vec<ResolutionSummary>, DomainError> {
+    let ids = repo.list_aggregate_ids(EVENT_TYPES).await?;
+    let mut summaries = Vec::with_capacity(ids.len());
+    for id in ids {
+        let stored_events = repo.load_events(id).await?;
+        if stored_events.is_empty() {
+            continue;
+        }
+        let resolution = command_handlers::reconstitute(id, &stored_events)?;
+        summaries.push(ResolutionSummary {
+            resolution_id: id,
+            phase: resolution.phase_name().to_owned(),
+            version: resolution.version,
+        });
+    }
+    Ok(summaries)
+}
+
 /// Retrieves a resolution by its aggregate ID.
 ///
 /// # Errors
@@ -135,7 +178,7 @@ mod tests {
     use otherworlds_core::repository::StoredEvent;
     use uuid::Uuid;
 
-    use crate::application::query_handlers::get_resolution_by_id;
+    use crate::application::query_handlers::{get_resolution_by_id, list_resolutions};
     use crate::domain::events::{
         CheckOutcome, CheckResolved, EffectsProduced, IntentDeclared, ResolvedEffect,
         RulesEventKind,
@@ -285,5 +328,30 @@ mod tests {
             DomainError::AggregateNotFound(id) => assert_eq!(id, resolution_id),
             other => panic!("expected AggregateNotFound, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_list_resolutions_returns_empty_when_no_aggregates() {
+        let repo = EmptyEventRepository;
+
+        let result = list_resolutions(&repo).await.unwrap();
+
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_list_resolutions_returns_summaries() {
+        let resolution_id = Uuid::new_v4();
+        let repo = RecordingEventRepository::with_aggregate_ids(
+            Ok(vec![intent_declared_event(resolution_id)]),
+            vec![resolution_id],
+        );
+
+        let result = list_resolutions(&repo).await.unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].resolution_id, resolution_id);
+        assert_eq!(result[0].phase, "intent_declared");
+        assert_eq!(result[0].version, 1);
     }
 }

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, instrument};
 use uuid::Uuid;
 
-use otherworlds_session::application::query_handlers::CampaignRunView;
+use otherworlds_session::application::query_handlers::{CampaignRunSummary, CampaignRunView};
 use otherworlds_session::application::{command_handlers, query_handlers};
 use otherworlds_session::domain::commands;
 
@@ -133,6 +133,15 @@ async fn branch_timeline(
     }))
 }
 
+/// GET /
+#[instrument(skip(state))]
+async fn list_campaign_runs(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<CampaignRunSummary>>, ApiError> {
+    let summaries = query_handlers::list_campaign_runs(&*state.event_repository).await?;
+    Ok(Json(summaries))
+}
+
 /// GET /{`run_id`}
 #[instrument(skip(state), fields(run_id = %id))]
 async fn get_campaign_run(
@@ -146,6 +155,7 @@ async fn get_campaign_run(
 /// Returns the router for the session context.
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route("/", get(list_campaign_runs))
         .route("/{run_id}", get(get_campaign_run))
         .route("/start-campaign-run", post(start_campaign_run))
         .route("/create-checkpoint", post(create_checkpoint))
@@ -204,6 +214,13 @@ mod tests {
             _events: &[StoredEvent],
         ) -> Result<(), DomainError> {
             Ok(())
+        }
+
+        async fn list_aggregate_ids(
+            &self,
+            _event_types: &[&str],
+        ) -> Result<Vec<Uuid>, DomainError> {
+            Ok(vec![])
         }
     }
 
@@ -541,6 +558,46 @@ mod tests {
             .unwrap();
         let json: Value = serde_json::from_slice(&body_bytes).unwrap();
 
+        assert_eq!(json["error"], "infrastructure_error");
+    }
+
+    #[tokio::test]
+    async fn test_list_campaign_runs_returns_200_with_empty_array() {
+        let app = router().with_state(empty_app_state());
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert!(json.as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_list_campaign_runs_returns_500_when_repository_fails() {
+        let app = router().with_state(failing_app_state());
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
         assert_eq!(json["error"], "infrastructure_error");
     }
 }

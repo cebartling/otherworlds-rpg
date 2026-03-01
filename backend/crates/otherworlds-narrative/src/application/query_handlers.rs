@@ -23,6 +23,49 @@ pub struct NarrativeSessionView {
     pub version: i64,
 }
 
+/// Event types used by the Narrative Orchestration context.
+const EVENT_TYPES: &[&str] = &[
+    "narrative.beat_advanced",
+    "narrative.choice_presented",
+    "narrative.scene_started",
+];
+
+/// Summary view for listing narrative sessions.
+#[derive(Debug, Serialize)]
+pub struct NarrativeSessionSummary {
+    /// The session identifier.
+    pub session_id: Uuid,
+    /// The most recent beat ID.
+    pub current_beat_id: Option<Uuid>,
+    /// Current version (event count).
+    pub version: i64,
+}
+
+/// Lists all narrative sessions.
+///
+/// # Errors
+///
+/// Returns `DomainError::Infrastructure` if querying or deserialization fails.
+pub async fn list_sessions(
+    repo: &dyn EventRepository,
+) -> Result<Vec<NarrativeSessionSummary>, DomainError> {
+    let ids = repo.list_aggregate_ids(EVENT_TYPES).await?;
+    let mut summaries = Vec::with_capacity(ids.len());
+    for id in ids {
+        let stored_events = repo.load_events(id).await?;
+        if stored_events.is_empty() {
+            continue;
+        }
+        let session = command_handlers::reconstitute(id, &stored_events)?;
+        summaries.push(NarrativeSessionSummary {
+            session_id: id,
+            current_beat_id: session.current_beat_id,
+            version: session.version,
+        });
+    }
+    Ok(summaries)
+}
+
 /// Retrieves a narrative session by its aggregate ID.
 ///
 /// # Errors
@@ -53,7 +96,7 @@ mod tests {
     use otherworlds_core::repository::StoredEvent;
     use uuid::Uuid;
 
-    use crate::application::query_handlers::get_session_by_id;
+    use crate::application::query_handlers::{get_session_by_id, list_sessions};
     use crate::domain::events::{BeatAdvanced, NarrativeEventKind};
     use otherworlds_test_support::{EmptyEventRepository, RecordingEventRepository};
 
@@ -105,5 +148,50 @@ mod tests {
             DomainError::AggregateNotFound(id) => assert_eq!(id, session_id),
             other => panic!("expected AggregateNotFound, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_list_sessions_returns_empty_when_no_aggregates() {
+        // Arrange
+        let repo = EmptyEventRepository;
+
+        // Act
+        let result = list_sessions(&repo).await.unwrap();
+
+        // Assert
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_list_sessions_returns_summaries() {
+        // Arrange
+        let session_id = Uuid::new_v4();
+        let beat_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+
+        let events = vec![StoredEvent {
+            event_id: Uuid::new_v4(),
+            aggregate_id: session_id,
+            event_type: "narrative.beat_advanced".to_owned(),
+            payload: serde_json::to_value(NarrativeEventKind::BeatAdvanced(BeatAdvanced {
+                session_id,
+                beat_id,
+            }))
+            .unwrap(),
+            sequence_number: 1,
+            correlation_id: Uuid::new_v4(),
+            causation_id: Uuid::new_v4(),
+            occurred_at: fixed_now,
+        }];
+        let repo = RecordingEventRepository::with_aggregate_ids(Ok(events), vec![session_id]);
+
+        // Act
+        let result = list_sessions(&repo).await.unwrap();
+
+        // Assert
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].session_id, session_id);
+        assert_eq!(result[0].current_beat_id, Some(beat_id));
+        assert_eq!(result[0].version, 1);
     }
 }

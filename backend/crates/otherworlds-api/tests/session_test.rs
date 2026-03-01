@@ -78,3 +78,27 @@ async fn test_session_get_nonexistent_returns_404(pool: PgPool) {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(json["error"], "aggregate_not_found");
 }
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn test_session_list_includes_started_run(pool: PgPool) {
+    let campaign_id = Uuid::new_v4();
+
+    // Start a campaign run
+    let app = common::build_test_app(pool.clone());
+    let (status, json) = common::post_json(
+        app,
+        "/api/v1/sessions/start-campaign-run",
+        &serde_json::json!({ "campaign_id": campaign_id }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let run_id: Uuid = json["aggregate_id"].as_str().unwrap().parse().unwrap();
+
+    // GET /api/v1/sessions — list should include the run
+    let app = common::build_test_app(pool);
+    let (status, json) = common::get_json(app, "/api/v1/sessions").await;
+
+    assert_eq!(status, StatusCode::OK);
+    let runs = json.as_array().unwrap();
+    assert!(runs.iter().any(|r| r["run_id"] == run_id.to_string()));
+}

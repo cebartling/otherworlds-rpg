@@ -81,3 +81,31 @@ async fn test_content_get_nonexistent_returns_404(pool: PgPool) {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(json["error"], "aggregate_not_found");
 }
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn test_content_list_includes_ingested_campaign(pool: PgPool) {
+    // Ingest a campaign
+    let app = common::build_test_app(pool.clone());
+    let (status, json) = common::post_json(
+        app,
+        "/api/v1/content/ingest-campaign",
+        &serde_json::json!({
+            "source": "# My Campaign\n\nContent here."
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let campaign_id: Uuid = json["aggregate_id"].as_str().unwrap().parse().unwrap();
+
+    // GET /api/v1/content — list should include the campaign
+    let app = common::build_test_app(pool);
+    let (status, json) = common::get_json(app, "/api/v1/content").await;
+
+    assert_eq!(status, StatusCode::OK);
+    let campaigns = json.as_array().unwrap();
+    assert!(
+        campaigns
+            .iter()
+            .any(|c| c["campaign_id"] == campaign_id.to_string())
+    );
+}

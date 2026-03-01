@@ -108,3 +108,24 @@ async fn test_inventory_get_nonexistent_returns_404(pool: PgPool) {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(json["error"], "aggregate_not_found");
 }
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn test_inventory_list_includes_seeded_inventory(pool: PgPool) {
+    let inventory_id = Uuid::new_v4();
+    let item_id = Uuid::new_v4();
+
+    // Seed an inventory
+    seed_inventory(&pool, inventory_id, item_id).await;
+
+    // GET /api/v1/inventory — list should include the inventory
+    let app = common::build_test_app(pool);
+    let (status, json) = common::get_json(app, "/api/v1/inventory").await;
+
+    assert_eq!(status, StatusCode::OK);
+    let inventories = json.as_array().unwrap();
+    assert!(
+        inventories
+            .iter()
+            .any(|i| i["inventory_id"] == inventory_id.to_string())
+    );
+}

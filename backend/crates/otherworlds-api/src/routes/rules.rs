@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, instrument};
 use uuid::Uuid;
 
-use otherworlds_rules::application::query_handlers::ResolutionView;
+use otherworlds_rules::application::query_handlers::{ResolutionSummary, ResolutionView};
 use otherworlds_rules::application::{command_handlers, query_handlers};
 use otherworlds_rules::domain::commands;
 
@@ -176,6 +176,15 @@ async fn produce_effects(
     Ok(Json(CommandResponse { event_ids }))
 }
 
+/// GET /
+#[instrument(skip(state))]
+async fn list_resolutions(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<ResolutionSummary>>, ApiError> {
+    let summaries = query_handlers::list_resolutions(&*state.event_repository).await?;
+    Ok(Json(summaries))
+}
+
 /// GET /{`resolution_id`}
 #[instrument(skip(state), fields(resolution_id = %id))]
 async fn get_resolution(
@@ -189,6 +198,7 @@ async fn get_resolution(
 /// Returns the router for the rules context.
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route("/", get(list_resolutions))
         .route("/{resolution_id}", get(get_resolution))
         .route("/declare-intent", post(declare_intent))
         .route("/resolve-check", post(resolve_check))
@@ -615,5 +625,45 @@ mod tests {
             .unwrap();
         let json: Value = serde_json::from_slice(&body_bytes).unwrap();
         assert_eq!(json["error"], "aggregate_not_found");
+    }
+
+    #[tokio::test]
+    async fn test_list_resolutions_returns_200_with_empty_array() {
+        let app = router().with_state(test_app_state());
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert!(json.as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_list_resolutions_returns_500_when_repository_fails() {
+        let app = router().with_state(failing_app_state());
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(json["error"], "infrastructure_error");
     }
 }

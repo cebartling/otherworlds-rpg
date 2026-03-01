@@ -14,6 +14,7 @@ use uuid::Uuid;
 pub struct RecordingEventRepository {
     load_result: Mutex<Vec<StoredEvent>>,
     appended: Mutex<Vec<(Uuid, i64, Vec<StoredEvent>)>>,
+    aggregate_ids: Mutex<Vec<Uuid>>,
 }
 
 impl RecordingEventRepository {
@@ -37,6 +38,28 @@ impl RecordingEventRepository {
                 "RecordingEventRepository::new does not accept Err; use FailingEventRepository",
             )),
             appended: Mutex::new(Vec::new()),
+            aggregate_ids: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Create a new recording repository with pre-configured aggregate IDs
+    /// returned by `list_aggregate_ids`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `load_result` is `Err`. Use `FailingEventRepository` for
+    /// error-path testing instead.
+    #[must_use]
+    pub fn with_aggregate_ids(
+        load_result: Result<Vec<StoredEvent>, DomainError>,
+        aggregate_ids: Vec<Uuid>,
+    ) -> Self {
+        Self {
+            load_result: Mutex::new(load_result.expect(
+                "RecordingEventRepository::with_aggregate_ids does not accept Err; use FailingEventRepository",
+            )),
+            appended: Mutex::new(Vec::new()),
+            aggregate_ids: Mutex::new(aggregate_ids),
         }
     }
 
@@ -68,6 +91,10 @@ impl EventRepository for RecordingEventRepository {
             .push((aggregate_id, expected_version, events.to_vec()));
         Ok(())
     }
+
+    async fn list_aggregate_ids(&self, _event_types: &[&str]) -> Result<Vec<Uuid>, DomainError> {
+        Ok(self.aggregate_ids.lock().unwrap().clone())
+    }
 }
 
 /// An event repository that always returns an empty event list and silently
@@ -90,6 +117,10 @@ impl EventRepository for EmptyEventRepository {
     ) -> Result<(), DomainError> {
         Ok(())
     }
+
+    async fn list_aggregate_ids(&self, _event_types: &[&str]) -> Result<Vec<Uuid>, DomainError> {
+        Ok(vec![])
+    }
 }
 
 /// An event repository that always returns an infrastructure error. Useful for
@@ -109,6 +140,10 @@ impl EventRepository for FailingEventRepository {
         _expected_version: i64,
         _events: &[StoredEvent],
     ) -> Result<(), DomainError> {
+        Err(DomainError::Infrastructure("connection refused".into()))
+    }
+
+    async fn list_aggregate_ids(&self, _event_types: &[&str]) -> Result<Vec<Uuid>, DomainError> {
         Err(DomainError::Infrastructure("connection refused".into()))
     }
 }

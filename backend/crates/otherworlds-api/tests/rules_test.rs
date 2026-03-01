@@ -134,3 +134,37 @@ async fn test_rules_get_nonexistent_resolution_returns_404(pool: PgPool) {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(json["error"], "aggregate_not_found");
 }
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn test_rules_list_resolutions_includes_created_resolution(pool: PgPool) {
+    let resolution_id = Uuid::new_v4();
+    let intent_id = Uuid::new_v4();
+
+    // Create a resolution via declare-intent
+    let app = common::build_test_app(pool.clone());
+    let (status, _) = common::post_json(
+        app,
+        "/api/v1/rules/declare-intent",
+        &serde_json::json!({
+            "resolution_id": resolution_id,
+            "intent_id": intent_id,
+            "action_type": "skill_check",
+            "difficulty_class": 15,
+            "modifier": 3
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // GET /api/v1/rules — list should include the resolution
+    let app = common::build_test_app(pool);
+    let (status, json) = common::get_json(app, "/api/v1/rules").await;
+
+    assert_eq!(status, StatusCode::OK);
+    let resolutions = json.as_array().unwrap();
+    assert!(
+        resolutions
+            .iter()
+            .any(|r| r["resolution_id"] == resolution_id.to_string())
+    );
+}

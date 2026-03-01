@@ -21,6 +21,49 @@ pub struct InventoryView {
     pub version: i64,
 }
 
+/// Event types used by the Inventory & Economy context.
+const EVENT_TYPES: &[&str] = &[
+    "inventory.item_added",
+    "inventory.item_removed",
+    "inventory.item_equipped",
+];
+
+/// Summary view for listing inventories.
+#[derive(Debug, Serialize)]
+pub struct InventorySummary {
+    /// The inventory identifier.
+    pub inventory_id: Uuid,
+    /// Number of items in the inventory.
+    pub item_count: usize,
+    /// Current version (event count).
+    pub version: i64,
+}
+
+/// Lists all inventories.
+///
+/// # Errors
+///
+/// Returns `DomainError::Infrastructure` if querying or deserialization fails.
+pub async fn list_inventories(
+    repo: &dyn EventRepository,
+) -> Result<Vec<InventorySummary>, DomainError> {
+    let ids = repo.list_aggregate_ids(EVENT_TYPES).await?;
+    let mut summaries = Vec::with_capacity(ids.len());
+    for id in ids {
+        let stored_events = repo.load_events(id).await?;
+        if stored_events.is_empty() {
+            continue;
+        }
+        let inventory = command_handlers::reconstitute(id, &stored_events)?;
+        summaries.push(InventorySummary {
+            inventory_id: id,
+            item_count: inventory.items.len(),
+            version: inventory.version,
+        });
+    }
+    Ok(summaries)
+}
+
 /// Retrieves an inventory by its aggregate ID.
 ///
 /// Loads all stored events for the aggregate, reconstitutes the inventory,
@@ -55,7 +98,7 @@ mod tests {
     use otherworlds_core::repository::StoredEvent;
     use uuid::Uuid;
 
-    use crate::application::query_handlers::get_inventory_by_id;
+    use crate::application::query_handlers::{get_inventory_by_id, list_inventories};
     use crate::domain::events::{ITEM_ADDED_EVENT_TYPE, InventoryEventKind, ItemAdded};
     use otherworlds_test_support::{EmptyEventRepository, RecordingEventRepository};
 
@@ -125,5 +168,44 @@ mod tests {
             DomainError::AggregateNotFound(id) => assert_eq!(id, inventory_id),
             other => panic!("expected AggregateNotFound, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_list_inventories_returns_empty_when_no_aggregates() {
+        let repo = EmptyEventRepository;
+
+        let result = list_inventories(&repo).await.unwrap();
+
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_list_inventories_returns_summaries() {
+        let inventory_id = Uuid::new_v4();
+        let item_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+
+        let events = vec![StoredEvent {
+            event_id: Uuid::new_v4(),
+            aggregate_id: inventory_id,
+            event_type: ITEM_ADDED_EVENT_TYPE.to_owned(),
+            payload: serde_json::to_value(InventoryEventKind::ItemAdded(ItemAdded {
+                inventory_id,
+                item_id,
+            }))
+            .unwrap(),
+            sequence_number: 1,
+            correlation_id: Uuid::new_v4(),
+            causation_id: Uuid::new_v4(),
+            occurred_at: fixed_now,
+        }];
+        let repo = RecordingEventRepository::with_aggregate_ids(Ok(events), vec![inventory_id]);
+
+        let result = list_inventories(&repo).await.unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].inventory_id, inventory_id);
+        assert_eq!(result[0].item_count, 1);
+        assert_eq!(result[0].version, 1);
     }
 }

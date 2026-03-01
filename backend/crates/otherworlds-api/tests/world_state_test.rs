@@ -73,3 +73,33 @@ async fn test_world_get_nonexistent_returns_404(pool: PgPool) {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(json["error"], "aggregate_not_found");
 }
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn test_world_list_snapshots_includes_created_world(pool: PgPool) {
+    let world_id = Uuid::new_v4();
+
+    // Create a world snapshot via apply-effect
+    let app = common::build_test_app(pool.clone());
+    let (status, _) = common::post_json(
+        app,
+        "/api/v1/world/apply-effect",
+        &serde_json::json!({
+            "world_id": world_id,
+            "fact_key": "quest_complete"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // GET /api/v1/world — list should include the world snapshot
+    let app = common::build_test_app(pool);
+    let (status, json) = common::get_json(app, "/api/v1/world").await;
+
+    assert_eq!(status, StatusCode::OK);
+    let snapshots = json.as_array().unwrap();
+    assert!(
+        snapshots
+            .iter()
+            .any(|s| s["world_id"] == world_id.to_string())
+    );
+}

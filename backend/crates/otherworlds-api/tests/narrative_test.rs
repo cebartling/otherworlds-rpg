@@ -68,3 +68,30 @@ async fn test_narrative_get_nonexistent_session_returns_404(pool: PgPool) {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(json["error"], "aggregate_not_found");
 }
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn test_narrative_list_sessions_includes_created_session(pool: PgPool) {
+    let session_id = Uuid::new_v4();
+
+    // Create a session via advance-beat
+    let app = common::build_test_app(pool.clone());
+    let (status, _) = common::post_json(
+        app,
+        "/api/v1/narrative/advance-beat",
+        &serde_json::json!({ "session_id": session_id }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // GET /api/v1/narrative — list should include the session
+    let app = common::build_test_app(pool);
+    let (status, json) = common::get_json(app, "/api/v1/narrative").await;
+
+    assert_eq!(status, StatusCode::OK);
+    let sessions = json.as_array().unwrap();
+    assert!(
+        sessions
+            .iter()
+            .any(|s| s["session_id"] == session_id.to_string())
+    );
+}

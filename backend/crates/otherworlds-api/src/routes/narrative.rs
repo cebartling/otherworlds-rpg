@@ -9,7 +9,9 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, instrument};
 use uuid::Uuid;
 
-use otherworlds_narrative::application::query_handlers::NarrativeSessionView;
+use otherworlds_narrative::application::query_handlers::{
+    NarrativeSessionSummary, NarrativeSessionView,
+};
 use otherworlds_narrative::application::{command_handlers, query_handlers};
 use otherworlds_narrative::domain::commands;
 
@@ -87,6 +89,15 @@ async fn present_choice(
     Ok(Json(CommandResponse { event_ids }))
 }
 
+/// GET /
+#[instrument(skip(state))]
+async fn list_sessions(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<NarrativeSessionSummary>>, ApiError> {
+    let summaries = query_handlers::list_sessions(&*state.event_repository).await?;
+    Ok(Json(summaries))
+}
+
 /// GET /{`session_id`}
 #[instrument(skip(state), fields(session_id = %id))]
 async fn get_session(
@@ -100,6 +111,7 @@ async fn get_session(
 /// Returns the router for the narrative context.
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route("/", get(list_sessions))
         .route("/{session_id}", get(get_session))
         .route("/advance-beat", post(advance_beat))
         .route("/present-choice", post(present_choice))
@@ -360,6 +372,56 @@ mod tests {
         let request = Request::builder()
             .method("GET")
             .uri(format!("/{session_id}"))
+            .body(Body::empty())
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        assert_eq!(json["error"], "infrastructure_error");
+    }
+
+    #[tokio::test]
+    async fn test_list_sessions_returns_200_with_empty_array() {
+        // Arrange
+        let app = router().with_state(test_app_state());
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/")
+            .body(Body::empty())
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        assert!(json.as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_list_sessions_returns_500_when_repository_fails() {
+        // Arrange
+        let app = router().with_state(failing_app_state());
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/")
             .body(Body::empty())
             .unwrap();
 

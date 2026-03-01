@@ -203,4 +203,33 @@ impl EventRepository for PgEventRepository {
 
         Ok(())
     }
+
+    #[instrument(skip(self, event_types), fields(type_count = event_types.len()))]
+    async fn list_aggregate_ids(&self, event_types: &[&str]) -> Result<Vec<Uuid>, DomainError> {
+        if event_types.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let event_type_strings: Vec<String> = event_types.iter().map(|s| (*s).to_owned()).collect();
+
+        let rows: Vec<(Uuid,)> = sqlx::query_as(
+            "SELECT DISTINCT aggregate_id \
+             FROM domain_events \
+             WHERE event_type = ANY($1) \
+             ORDER BY aggregate_id",
+        )
+        .bind(&event_type_strings)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| DomainError::Infrastructure(e.to_string()))?;
+
+        let ids: Vec<Uuid> = rows.into_iter().map(|(id,)| id).collect();
+
+        debug!(
+            aggregate_count = ids.len(),
+            "listed aggregate IDs by event type"
+        );
+
+        Ok(ids)
+    }
 }

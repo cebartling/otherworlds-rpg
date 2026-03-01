@@ -9,7 +9,9 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, instrument};
 use uuid::Uuid;
 
-use otherworlds_world_state::application::query_handlers::WorldSnapshotView;
+use otherworlds_world_state::application::query_handlers::{
+    WorldSnapshotSummary, WorldSnapshotView,
+};
 use otherworlds_world_state::application::{command_handlers, query_handlers};
 use otherworlds_world_state::domain::commands;
 
@@ -128,6 +130,15 @@ async fn update_disposition(
     Ok(Json(CommandResponse { event_ids }))
 }
 
+/// GET /
+#[instrument(skip(state))]
+async fn list_world_snapshots(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<WorldSnapshotSummary>>, ApiError> {
+    let summaries = query_handlers::list_world_snapshots(&*state.event_repository).await?;
+    Ok(Json(summaries))
+}
+
 /// GET /{`world_id`}
 #[instrument(skip(state), fields(world_id = %id))]
 async fn get_world_snapshot(
@@ -141,6 +152,7 @@ async fn get_world_snapshot(
 /// Returns the router for the world state context.
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route("/", get(list_world_snapshots))
         .route("/{world_id}", get(get_world_snapshot))
         .route("/apply-effect", post(apply_effect))
         .route("/set-flag", post(set_flag))
@@ -562,5 +574,45 @@ mod tests {
         let json: Value = serde_json::from_slice(&body_bytes).unwrap();
 
         assert_eq!(json["error"], "validation_error");
+    }
+
+    #[tokio::test]
+    async fn test_list_world_snapshots_returns_200_with_empty_array() {
+        let app = router().with_state(test_app_state());
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert!(json.as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_list_world_snapshots_returns_500_when_repository_fails() {
+        let app = router().with_state(failing_app_state());
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(json["error"], "infrastructure_error");
     }
 }
