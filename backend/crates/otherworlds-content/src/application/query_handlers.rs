@@ -57,9 +57,7 @@ mod tests {
     use uuid::Uuid;
 
     use crate::application::query_handlers::get_campaign_by_id;
-    use crate::domain::events::{
-        CAMPAIGN_INGESTED_EVENT_TYPE, CampaignIngested, ContentEventKind,
-    };
+    use crate::domain::events::{CAMPAIGN_INGESTED_EVENT_TYPE, CampaignIngested, ContentEventKind};
     use otherworlds_test_support::{EmptyEventRepository, RecordingEventRepository};
 
     #[tokio::test]

@@ -59,9 +59,7 @@ mod tests {
     use uuid::Uuid;
 
     use crate::application::query_handlers::get_world_snapshot_by_id;
-    use crate::domain::events::{
-        FlagSet, WorldFactChanged, WorldStateEventKind,
-    };
+    use crate::domain::events::{FlagSet, WorldFactChanged, WorldStateEventKind};
     use otherworlds_test_support::{EmptyEventRepository, RecordingEventRepository};
 
     #[tokio::test]

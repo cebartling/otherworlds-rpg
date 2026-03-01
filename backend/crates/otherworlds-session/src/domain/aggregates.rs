@@ -151,8 +151,7 @@ impl AggregateRoot for CampaignRun {
                 self.checkpoint_ids.push(payload.checkpoint_id);
             }
             SessionEventKind::TimelineBranched(payload) => {
-                self.branch_source =
-                    Some((payload.source_run_id, payload.from_checkpoint_id));
+                self.branch_source = Some((payload.source_run_id, payload.from_checkpoint_id));
             }
         }
         self.version += 1;

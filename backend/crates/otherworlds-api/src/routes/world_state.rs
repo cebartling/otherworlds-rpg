@@ -1,13 +1,16 @@
 //! Routes for the World State bounded context.
 
 use axum::extract::{Path, State};
-use axum::{Json, Router, routing::{get, post}};
+use axum::{
+    Json, Router,
+    routing::{get, post},
+};
 use serde::{Deserialize, Serialize};
 use tracing::{info, instrument};
 use uuid::Uuid;
 
-use otherworlds_world_state::application::{command_handlers, query_handlers};
 use otherworlds_world_state::application::query_handlers::WorldSnapshotView;
+use otherworlds_world_state::application::{command_handlers, query_handlers};
 use otherworlds_world_state::domain::commands;
 
 use crate::error::ApiError;
@@ -153,8 +156,8 @@ mod tests {
     use chrono::Utc;
     use otherworlds_core::clock::Clock;
     use otherworlds_core::repository::EventRepository;
-    use otherworlds_core::rng::DeterministicRng;
     use otherworlds_core::repository::StoredEvent;
+    use otherworlds_core::rng::DeterministicRng;
     use otherworlds_test_support::{
         EmptyEventRepository, FailingEventRepository, FixedClock, MockRng, RecordingEventRepository,
     };

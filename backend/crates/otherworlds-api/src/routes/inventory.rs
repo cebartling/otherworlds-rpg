@@ -1,13 +1,16 @@
 //! Routes for the Inventory & Economy bounded context.
 
 use axum::extract::{Path, State};
-use axum::{Json, Router, routing::{get, post}};
+use axum::{
+    Json, Router,
+    routing::{get, post},
+};
 use serde::{Deserialize, Serialize};
 use tracing::{info, instrument};
 use uuid::Uuid;
 
-use otherworlds_inventory::application::{command_handlers, query_handlers};
 use otherworlds_inventory::application::query_handlers::InventoryView;
+use otherworlds_inventory::application::{command_handlers, query_handlers};
 use otherworlds_inventory::domain::commands;
 
 use crate::error::ApiError;

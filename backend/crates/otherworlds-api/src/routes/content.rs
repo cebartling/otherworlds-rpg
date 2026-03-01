@@ -1,13 +1,16 @@
 //! Routes for the Content Authoring bounded context.
 
 use axum::extract::{Path, State};
-use axum::{Json, Router, routing::{get, post}};
+use axum::{
+    Json, Router,
+    routing::{get, post},
+};
 use serde::{Deserialize, Serialize};
 use tracing::{info, instrument};
 use uuid::Uuid;
 
-use otherworlds_content::application::{command_handlers, query_handlers};
 use otherworlds_content::application::query_handlers::CampaignView;
+use otherworlds_content::application::{command_handlers, query_handlers};
 use otherworlds_content::domain::commands;
 
 use crate::error::ApiError;

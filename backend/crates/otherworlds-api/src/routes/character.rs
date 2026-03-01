@@ -1,13 +1,16 @@
 //! Routes for the Character Management bounded context.
 
 use axum::extract::{Path, State};
-use axum::{Json, Router, routing::{get, post}};
+use axum::{
+    Json, Router,
+    routing::{get, post},
+};
 use serde::{Deserialize, Serialize};
 use tracing::{info, instrument};
 use uuid::Uuid;
 
-use otherworlds_character::application::{command_handlers, query_handlers};
 use otherworlds_character::application::query_handlers::CharacterView;
+use otherworlds_character::application::{command_handlers, query_handlers};
 use otherworlds_character::domain::commands;
 
 use crate::error::ApiError;
@@ -152,11 +155,11 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use chrono::Utc;
+    use otherworlds_character::domain::events::{CharacterCreated, CharacterEventKind};
     use otherworlds_core::clock::Clock;
     use otherworlds_core::repository::EventRepository;
-    use otherworlds_core::rng::DeterministicRng;
-    use otherworlds_character::domain::events::{CharacterCreated, CharacterEventKind};
     use otherworlds_core::repository::StoredEvent;
+    use otherworlds_core::rng::DeterministicRng;
     use otherworlds_test_support::{
         EmptyEventRepository, FailingEventRepository, FixedClock, MockRng, RecordingEventRepository,
     };
@@ -490,12 +493,10 @@ mod tests {
             event_id: Uuid::new_v4(),
             aggregate_id: character_id,
             event_type: "character.character_created".to_owned(),
-            payload: serde_json::to_value(CharacterEventKind::CharacterCreated(
-                CharacterCreated {
-                    character_id,
-                    name: "Alaric".to_owned(),
-                },
-            ))
+            payload: serde_json::to_value(CharacterEventKind::CharacterCreated(CharacterCreated {
+                character_id,
+                name: "Alaric".to_owned(),
+            }))
             .unwrap(),
             sequence_number: 1,
             correlation_id: Uuid::new_v4(),

@@ -59,9 +59,7 @@ mod tests {
     use uuid::Uuid;
 
     use crate::application::query_handlers::get_character_by_id;
-    use crate::domain::events::{
-        CharacterCreated, CharacterEventKind,
-    };
+    use crate::domain::events::{CharacterCreated, CharacterEventKind};
     use otherworlds_test_support::{EmptyEventRepository, RecordingEventRepository};
 
     #[tokio::test]
@@ -74,12 +72,10 @@ mod tests {
             event_id: Uuid::new_v4(),
             aggregate_id: character_id,
             event_type: "character.character_created".to_owned(),
-            payload: serde_json::to_value(CharacterEventKind::CharacterCreated(
-                CharacterCreated {
-                    character_id,
-                    name: "Alaric".to_owned(),
-                },
-            ))
+            payload: serde_json::to_value(CharacterEventKind::CharacterCreated(CharacterCreated {
+                character_id,
+                name: "Alaric".to_owned(),
+            }))
             .unwrap(),
             sequence_number: 1,
             correlation_id: Uuid::new_v4(),
