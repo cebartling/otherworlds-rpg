@@ -111,7 +111,7 @@ mod tests {
 
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
-    use chrono::Utc;
+    use chrono::{TimeZone, Utc};
     use otherworlds_core::clock::Clock;
     use otherworlds_core::repository::EventRepository;
     use otherworlds_core::repository::StoredEvent;
@@ -285,7 +285,7 @@ mod tests {
         // Arrange
         let session_id = Uuid::new_v4();
         let beat_id = Uuid::new_v4();
-        let fixed_now = chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 1, 15, 10, 0, 0).unwrap();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let events = vec![StoredEvent {
             event_id: Uuid::new_v4(),
             aggregate_id: session_id,

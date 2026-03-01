@@ -165,6 +165,68 @@ mod tests {
     }
 
     #[test]
+    fn test_apply_beat_advanced_sets_current_beat_id() {
+        // Arrange
+        let session_id = Uuid::new_v4();
+        let beat_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let mut session = NarrativeSession::new(session_id);
+        let event = NarrativeEvent {
+            metadata: EventMetadata {
+                event_id: Uuid::new_v4(),
+                event_type: "narrative.beat_advanced".to_owned(),
+                aggregate_id: session_id,
+                sequence_number: 1,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+            kind: NarrativeEventKind::BeatAdvanced(BeatAdvanced {
+                session_id,
+                beat_id,
+            }),
+        };
+
+        // Act
+        session.apply(&event);
+
+        // Assert
+        assert_eq!(session.current_beat_id, Some(beat_id));
+        assert_eq!(session.version, 1);
+    }
+
+    #[test]
+    fn test_apply_choice_presented_pushes_to_choice_ids() {
+        // Arrange
+        let session_id = Uuid::new_v4();
+        let choice_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let mut session = NarrativeSession::new(session_id);
+        let event = NarrativeEvent {
+            metadata: EventMetadata {
+                event_id: Uuid::new_v4(),
+                event_type: "narrative.choice_presented".to_owned(),
+                aggregate_id: session_id,
+                sequence_number: 1,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+            kind: NarrativeEventKind::ChoicePresented(ChoicePresented {
+                session_id,
+                choice_id,
+            }),
+        };
+
+        // Act
+        session.apply(&event);
+
+        // Assert
+        assert_eq!(session.choice_ids, vec![choice_id]);
+        assert_eq!(session.version, 1);
+    }
+
+    #[test]
     fn test_present_choice_produces_choice_presented_event() {
         // Arrange
         let session_id = Uuid::new_v4();

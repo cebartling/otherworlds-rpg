@@ -242,6 +242,113 @@ mod tests {
     }
 
     #[test]
+    fn test_apply_character_created_sets_name() {
+        // Arrange
+        let character_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let mut character = Character::new(character_id);
+        let event = CharacterEvent {
+            metadata: EventMetadata {
+                event_id: Uuid::new_v4(),
+                event_type: "character.character_created".to_owned(),
+                aggregate_id: character_id,
+                sequence_number: 1,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+            kind: CharacterEventKind::CharacterCreated(CharacterCreated {
+                character_id,
+                name: "Alaric".to_owned(),
+            }),
+        };
+
+        // Act
+        character.apply(&event);
+
+        // Assert
+        assert_eq!(character.name, Some("Alaric".to_owned()));
+        assert_eq!(character.version, 1);
+    }
+
+    #[test]
+    fn test_apply_attribute_modified_updates_attributes() {
+        // Arrange
+        let character_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let mut character = Character::new(character_id);
+        let event = CharacterEvent {
+            metadata: EventMetadata {
+                event_id: Uuid::new_v4(),
+                event_type: "character.attribute_modified".to_owned(),
+                aggregate_id: character_id,
+                sequence_number: 1,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+            kind: CharacterEventKind::AttributeModified(AttributeModified {
+                character_id,
+                attribute: "strength".to_owned(),
+                new_value: 18,
+            }),
+        };
+
+        // Act
+        character.apply(&event);
+
+        // Assert
+        assert_eq!(character.attributes.get("strength"), Some(&18));
+        assert_eq!(character.version, 1);
+    }
+
+    #[test]
+    fn test_apply_experience_gained_accumulates_experience() {
+        // Arrange
+        let character_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let mut character = Character::new(character_id);
+        let event1 = CharacterEvent {
+            metadata: EventMetadata {
+                event_id: Uuid::new_v4(),
+                event_type: "character.experience_gained".to_owned(),
+                aggregate_id: character_id,
+                sequence_number: 1,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+            kind: CharacterEventKind::ExperienceGained(ExperienceGained {
+                character_id,
+                amount: 100,
+            }),
+        };
+        let event2 = CharacterEvent {
+            metadata: EventMetadata {
+                event_id: Uuid::new_v4(),
+                event_type: "character.experience_gained".to_owned(),
+                aggregate_id: character_id,
+                sequence_number: 2,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+            kind: CharacterEventKind::ExperienceGained(ExperienceGained {
+                character_id,
+                amount: 150,
+            }),
+        };
+
+        // Act
+        character.apply(&event1);
+        character.apply(&event2);
+
+        // Assert
+        assert_eq!(character.experience, 250);
+        assert_eq!(character.version, 2);
+    }
+
+    #[test]
     fn test_award_experience_produces_experience_gained_event() {
         // Arrange
         let character_id = Uuid::new_v4();

@@ -11,6 +11,10 @@ use uuid::Uuid;
 use crate::application::command_handlers;
 
 /// Read-only view of a campaign run aggregate.
+///
+/// Note: `branch_source` is intentionally omitted from this view.
+/// Branching metadata is internal bookkeeping; consumers that need it
+/// should use a dedicated branching query.
 #[derive(Debug, Serialize)]
 pub struct CampaignRunView {
     /// The campaign run identifier.

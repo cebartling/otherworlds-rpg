@@ -154,7 +154,7 @@ mod tests {
 
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
-    use chrono::Utc;
+    use chrono::{TimeZone, Utc};
     use otherworlds_character::domain::events::{CharacterCreated, CharacterEventKind};
     use otherworlds_core::clock::Clock;
     use otherworlds_core::repository::EventRepository;
@@ -488,7 +488,7 @@ mod tests {
     async fn test_get_character_returns_200_with_json() {
         // Arrange
         let character_id = Uuid::new_v4();
-        let fixed_now = chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 1, 15, 10, 0, 0).unwrap();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let events = vec![StoredEvent {
             event_id: Uuid::new_v4(),
             aggregate_id: character_id,

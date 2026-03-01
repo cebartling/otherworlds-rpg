@@ -211,6 +211,101 @@ mod tests {
     }
 
     #[test]
+    fn test_apply_campaign_run_started_sets_campaign_id() {
+        // Arrange
+        let run_id = Uuid::new_v4();
+        let campaign_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let mut run = CampaignRun::new(run_id);
+        let event = SessionEvent {
+            metadata: EventMetadata {
+                event_id: Uuid::new_v4(),
+                event_type: CAMPAIGN_RUN_STARTED_EVENT_TYPE.to_owned(),
+                aggregate_id: run_id,
+                sequence_number: 1,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+            kind: SessionEventKind::CampaignRunStarted(CampaignRunStarted {
+                run_id,
+                campaign_id,
+            }),
+        };
+
+        // Act
+        run.apply(&event);
+
+        // Assert
+        assert_eq!(run.campaign_id, Some(campaign_id));
+        assert_eq!(run.version, 1);
+    }
+
+    #[test]
+    fn test_apply_checkpoint_created_pushes_to_checkpoint_ids() {
+        // Arrange
+        let run_id = Uuid::new_v4();
+        let checkpoint_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let mut run = CampaignRun::new(run_id);
+        let event = SessionEvent {
+            metadata: EventMetadata {
+                event_id: Uuid::new_v4(),
+                event_type: CHECKPOINT_CREATED_EVENT_TYPE.to_owned(),
+                aggregate_id: run_id,
+                sequence_number: 1,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+            kind: SessionEventKind::CheckpointCreated(CheckpointCreated {
+                run_id,
+                checkpoint_id,
+            }),
+        };
+
+        // Act
+        run.apply(&event);
+
+        // Assert
+        assert_eq!(run.checkpoint_ids, vec![checkpoint_id]);
+        assert_eq!(run.version, 1);
+    }
+
+    #[test]
+    fn test_apply_timeline_branched_sets_branch_source() {
+        // Arrange
+        let branch_run_id = Uuid::new_v4();
+        let source_run_id = Uuid::new_v4();
+        let from_checkpoint_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let mut run = CampaignRun::new(branch_run_id);
+        let event = SessionEvent {
+            metadata: EventMetadata {
+                event_id: Uuid::new_v4(),
+                event_type: TIMELINE_BRANCHED_EVENT_TYPE.to_owned(),
+                aggregate_id: branch_run_id,
+                sequence_number: 1,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+            kind: SessionEventKind::TimelineBranched(TimelineBranched {
+                source_run_id,
+                branch_run_id,
+                from_checkpoint_id,
+            }),
+        };
+
+        // Act
+        run.apply(&event);
+
+        // Assert
+        assert_eq!(run.branch_source, Some((source_run_id, from_checkpoint_id)));
+        assert_eq!(run.version, 1);
+    }
+
+    #[test]
     fn test_create_checkpoint_produces_checkpoint_created_event() {
         // Arrange
         let run_id = Uuid::new_v4();

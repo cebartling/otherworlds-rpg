@@ -183,6 +183,68 @@ mod tests {
     }
 
     #[test]
+    fn test_apply_intent_resolved_pushes_intent_id() {
+        // Arrange
+        let resolution_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let mut resolution = Resolution::new(resolution_id);
+        let event = RulesEvent {
+            metadata: EventMetadata {
+                event_id: Uuid::new_v4(),
+                event_type: "rules.intent_resolved".to_owned(),
+                aggregate_id: resolution_id,
+                sequence_number: 1,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+            kind: RulesEventKind::IntentResolved(IntentResolved {
+                resolution_id,
+                intent_id,
+            }),
+        };
+
+        // Act
+        resolution.apply(&event);
+
+        // Assert
+        assert_eq!(resolution.intent_ids, vec![intent_id]);
+        assert_eq!(resolution.version, 1);
+    }
+
+    #[test]
+    fn test_apply_check_performed_pushes_check_id() {
+        // Arrange
+        let resolution_id = Uuid::new_v4();
+        let check_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let mut resolution = Resolution::new(resolution_id);
+        let event = RulesEvent {
+            metadata: EventMetadata {
+                event_id: Uuid::new_v4(),
+                event_type: "rules.check_performed".to_owned(),
+                aggregate_id: resolution_id,
+                sequence_number: 1,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+            kind: RulesEventKind::CheckPerformed(CheckPerformed {
+                resolution_id,
+                check_id,
+            }),
+        };
+
+        // Act
+        resolution.apply(&event);
+
+        // Assert
+        assert_eq!(resolution.check_ids, vec![check_id]);
+        assert_eq!(resolution.version, 1);
+    }
+
+    #[test]
     fn test_perform_check_produces_check_performed_event() {
         // Arrange
         let resolution_id = Uuid::new_v4();

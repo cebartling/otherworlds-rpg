@@ -566,6 +566,7 @@ mod tests {
         assert_eq!(returned_id, campaign_id);
         assert_eq!(json["ingested"], true);
         assert_eq!(json["validated"], true);
+        assert_eq!(json["version_hash"], KNOWN_VERSION_HASH);
         assert_eq!(json["version"], 2);
     }
 

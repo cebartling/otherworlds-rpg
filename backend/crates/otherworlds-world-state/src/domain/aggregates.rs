@@ -205,6 +205,98 @@ mod tests {
     }
 
     #[test]
+    fn test_apply_world_fact_changed_pushes_fact() {
+        // Arrange
+        let world_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let mut snapshot = WorldSnapshot::new(world_id);
+        let event = WorldStateEvent {
+            metadata: EventMetadata {
+                event_id: Uuid::new_v4(),
+                event_type: "world_state.world_fact_changed".to_owned(),
+                aggregate_id: world_id,
+                sequence_number: 1,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+            kind: WorldStateEventKind::WorldFactChanged(WorldFactChanged {
+                world_id,
+                fact_key: "quest_complete".to_owned(),
+            }),
+        };
+
+        // Act
+        snapshot.apply(&event);
+
+        // Assert
+        assert_eq!(snapshot.facts, vec!["quest_complete".to_owned()]);
+        assert_eq!(snapshot.version, 1);
+    }
+
+    #[test]
+    fn test_apply_flag_set_inserts_flag() {
+        // Arrange
+        let world_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let mut snapshot = WorldSnapshot::new(world_id);
+        let event = WorldStateEvent {
+            metadata: EventMetadata {
+                event_id: Uuid::new_v4(),
+                event_type: "world_state.flag_set".to_owned(),
+                aggregate_id: world_id,
+                sequence_number: 1,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+            kind: WorldStateEventKind::FlagSet(FlagSet {
+                world_id,
+                flag_key: "door_unlocked".to_owned(),
+                value: true,
+            }),
+        };
+
+        // Act
+        snapshot.apply(&event);
+
+        // Assert
+        assert_eq!(snapshot.flags.get("door_unlocked"), Some(&true));
+        assert_eq!(snapshot.version, 1);
+    }
+
+    #[test]
+    fn test_apply_disposition_updated_pushes_entity_id() {
+        // Arrange
+        let world_id = Uuid::new_v4();
+        let entity_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let mut snapshot = WorldSnapshot::new(world_id);
+        let event = WorldStateEvent {
+            metadata: EventMetadata {
+                event_id: Uuid::new_v4(),
+                event_type: "world_state.disposition_updated".to_owned(),
+                aggregate_id: world_id,
+                sequence_number: 1,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+            kind: WorldStateEventKind::DispositionUpdated(DispositionUpdated {
+                world_id,
+                entity_id,
+            }),
+        };
+
+        // Act
+        snapshot.apply(&event);
+
+        // Assert
+        assert_eq!(snapshot.disposition_entity_ids, vec![entity_id]);
+        assert_eq!(snapshot.version, 1);
+    }
+
+    #[test]
     fn test_set_flag_produces_flag_set_event() {
         // Arrange
         let world_id = Uuid::new_v4();
