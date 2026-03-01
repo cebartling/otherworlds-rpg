@@ -21,7 +21,7 @@ impl DeterministicRng for MockRng {
 /// sequence is exhausted. Used in tests that need specific, repeatable random
 /// outcomes (e.g., dice rolls in the rules context).
 ///
-/// Values returned by `next_u32_range` are clamped to `[min, max)` to ensure
+/// Values returned by `next_u32_range` are clamped to `[min, max]` to ensure
 /// the mock produces values within the same bounds as production code.
 #[derive(Debug)]
 pub struct SequenceRng {
@@ -60,7 +60,7 @@ impl DeterministicRng for SequenceRng {
     fn next_u32_range(&mut self, min: u32, max: u32) -> u32 {
         let val = self.u32_values[self.u32_index];
         self.u32_index += 1;
-        val.clamp(min, max.saturating_sub(1))
+        val.clamp(min, max)
     }
 
     fn next_f64(&mut self) -> f64 {
@@ -101,8 +101,8 @@ mod tests {
     #[test]
     fn test_sequence_rng_clamps_to_bounds() {
         let mut rng = SequenceRng::new(vec![50]);
-        // Value 50 should be clamped to max-1 = 9 when range is [0, 10).
-        assert_eq!(rng.next_u32_range(0, 10), 9);
+        // Value 50 should be clamped to max = 10 when range is [0, 10].
+        assert_eq!(rng.next_u32_range(0, 10), 10);
     }
 
     #[test]
