@@ -9,6 +9,10 @@ description = "Axum HTTP API server for the Otherworlds RPG engine"
 [lints]
 workspace = true
 
+[lib]
+name = "otherworlds_api"
+path = "src/lib.rs"
+
 [[bin]]
 name = "otherworlds-api"
 path = "src/main.rs"
@@ -41,4 +45,5 @@ tracing-subscriber = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
 tower = { workspace = true }
+http-body-util = "0.1"
 otherworlds-test-support = { workspace = true }

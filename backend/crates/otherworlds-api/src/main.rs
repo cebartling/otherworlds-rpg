@@ -9,11 +9,8 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
-mod error;
-mod routes;
-mod state;
-
-use error::AppError;
+use otherworlds_api::error::AppError;
+use otherworlds_api::{routes, state};
 
 #[tokio::main]
 async fn main() -> Result<(), AppError> {
