@@ -1,7 +1,7 @@
 services:
   postgres:
     image: postgres:18
-    container_name: otherworlds-postgres
+    container_name: otherworlds-rpg-postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-otherworlds}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-otherworlds}
