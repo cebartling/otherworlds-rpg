@@ -1,5 +1,7 @@
 //! Aggregate roots for the World State context.
 
+use std::collections::HashMap;
+
 use otherworlds_core::aggregate::AggregateRoot;
 use otherworlds_core::clock::Clock;
 use otherworlds_core::event::EventMetadata;
@@ -15,7 +17,13 @@ pub struct WorldSnapshot {
     /// Aggregate identifier.
     pub id: Uuid,
     /// Current version (event count).
-    pub version: i64,
+    pub(crate) version: i64,
+    /// Fact keys that have been applied.
+    pub(crate) facts: Vec<String>,
+    /// Boolean flags set in the world.
+    pub(crate) flags: HashMap<String, bool>,
+    /// Entity IDs whose dispositions have been updated.
+    pub(crate) disposition_entity_ids: Vec<Uuid>,
     /// Uncommitted events pending persistence.
     uncommitted_events: Vec<WorldStateEvent>,
 }
@@ -27,6 +35,9 @@ impl WorldSnapshot {
         Self {
             id,
             version: 0,
+            facts: Vec::new(),
+            flags: HashMap::new(),
+            disposition_entity_ids: Vec::new(),
             uncommitted_events: Vec::new(),
         }
     }
@@ -126,7 +137,18 @@ impl AggregateRoot for WorldSnapshot {
         self.version
     }
 
-    fn apply(&mut self, _event: &Self::Event) {
+    fn apply(&mut self, event: &Self::Event) {
+        match &event.kind {
+            WorldStateEventKind::WorldFactChanged(payload) => {
+                self.facts.push(payload.fact_key.clone());
+            }
+            WorldStateEventKind::FlagSet(payload) => {
+                self.flags.insert(payload.flag_key.clone(), payload.value);
+            }
+            WorldStateEventKind::DispositionUpdated(payload) => {
+                self.disposition_entity_ids.push(payload.entity_id);
+            }
+        }
         self.version += 1;
     }
 

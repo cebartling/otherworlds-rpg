@@ -42,7 +42,7 @@ fn to_stored_event(event: &ContentEvent) -> StoredEvent {
 /// # Errors
 ///
 /// Returns `DomainError::Infrastructure` if event deserialization fails.
-fn reconstitute(
+pub(crate) fn reconstitute(
     campaign_id: Uuid,
     existing_events: &[StoredEvent],
 ) -> Result<Campaign, DomainError> {

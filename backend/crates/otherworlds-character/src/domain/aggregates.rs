@@ -1,5 +1,7 @@
 //! Aggregate roots for the Character Management context.
 
+use std::collections::HashMap;
+
 use otherworlds_core::aggregate::AggregateRoot;
 use otherworlds_core::clock::Clock;
 use otherworlds_core::event::EventMetadata;
@@ -15,7 +17,13 @@ pub struct Character {
     /// Aggregate identifier.
     pub id: Uuid,
     /// Current version (event count).
-    pub version: i64,
+    pub(crate) version: i64,
+    /// The character's name (set on creation).
+    pub(crate) name: Option<String>,
+    /// Character attributes (e.g., "strength" → 18).
+    pub(crate) attributes: HashMap<String, i32>,
+    /// Total experience accumulated.
+    pub(crate) experience: u32,
     /// Uncommitted events pending persistence.
     uncommitted_events: Vec<CharacterEvent>,
 }
@@ -27,6 +35,9 @@ impl Character {
         Self {
             id,
             version: 0,
+            name: None,
+            attributes: HashMap::new(),
+            experience: 0,
             uncommitted_events: Vec::new(),
         }
     }
@@ -126,7 +137,19 @@ impl AggregateRoot for Character {
         self.version
     }
 
-    fn apply(&mut self, _event: &Self::Event) {
+    fn apply(&mut self, event: &Self::Event) {
+        match &event.kind {
+            CharacterEventKind::CharacterCreated(payload) => {
+                self.name = Some(payload.name.clone());
+            }
+            CharacterEventKind::AttributeModified(payload) => {
+                self.attributes
+                    .insert(payload.attribute.clone(), payload.new_value);
+            }
+            CharacterEventKind::ExperienceGained(payload) => {
+                self.experience += payload.amount;
+            }
+        }
         self.version += 1;
     }
 

@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::domain::aggregates::Resolution;
 use crate::domain::commands::{PerformCheck, ResolveIntent};
-use crate::domain::events::RulesEvent;
+use crate::domain::events::{RulesEvent, RulesEventKind};
 
 fn to_stored_event(event: &RulesEvent) -> StoredEvent {
     let meta = event.metadata();
@@ -32,12 +32,35 @@ fn to_stored_event(event: &RulesEvent) -> StoredEvent {
 }
 
 /// Reconstitutes a `Resolution` from stored events.
-fn reconstitute(resolution_id: Uuid, existing_events: &[StoredEvent]) -> Resolution {
+///
+/// # Errors
+///
+/// Returns `DomainError::Infrastructure` if event deserialization fails.
+pub(crate) fn reconstitute(
+    resolution_id: Uuid,
+    existing_events: &[StoredEvent],
+) -> Result<Resolution, DomainError> {
     let mut resolution = Resolution::new(resolution_id);
-    #[allow(clippy::cast_possible_wrap)]
-    let version = existing_events.len() as i64;
-    resolution.version = version;
-    resolution
+    for stored in existing_events {
+        let kind: RulesEventKind =
+            serde_json::from_value(stored.payload.clone()).map_err(|e| {
+                DomainError::Infrastructure(format!("event deserialization failed: {e}"))
+            })?;
+        let event = RulesEvent {
+            metadata: otherworlds_core::event::EventMetadata {
+                event_id: stored.event_id,
+                event_type: stored.event_type.clone(),
+                aggregate_id: stored.aggregate_id,
+                sequence_number: stored.sequence_number,
+                correlation_id: stored.correlation_id,
+                causation_id: stored.causation_id,
+                occurred_at: stored.occurred_at,
+            },
+            kind,
+        };
+        resolution.apply(&event);
+    }
+    Ok(resolution)
 }
 
 /// Handles the `ResolveIntent` command: reconstitutes the aggregate, resolves
@@ -52,7 +75,7 @@ pub async fn handle_resolve_intent(
     repo: &dyn EventRepository,
 ) -> Result<Vec<StoredEvent>, DomainError> {
     let existing_events = repo.load_events(command.intent_id).await?;
-    let mut resolution = reconstitute(command.intent_id, &existing_events);
+    let mut resolution = reconstitute(command.intent_id, &existing_events)?;
 
     resolution.resolve_intent(command.intent_id, command.correlation_id, clock);
 
@@ -84,7 +107,7 @@ pub async fn handle_perform_check(
     repo: &dyn EventRepository,
 ) -> Result<Vec<StoredEvent>, DomainError> {
     let existing_events = repo.load_events(command.resolution_id).await?;
-    let mut resolution = reconstitute(command.resolution_id, &existing_events);
+    let mut resolution = reconstitute(command.resolution_id, &existing_events)?;
 
     // Lock RNG only for the synchronous domain method — never across an await.
     {

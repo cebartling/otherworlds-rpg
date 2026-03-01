@@ -14,7 +14,11 @@ pub struct Resolution {
     /// Aggregate identifier.
     pub id: Uuid,
     /// Current version (event count).
-    pub version: i64,
+    pub(crate) version: i64,
+    /// Intent IDs resolved during this resolution.
+    pub(crate) intent_ids: Vec<Uuid>,
+    /// Check IDs performed during this resolution.
+    pub(crate) check_ids: Vec<Uuid>,
     /// Uncommitted events pending persistence.
     uncommitted_events: Vec<RulesEvent>,
 }
@@ -26,6 +30,8 @@ impl Resolution {
         Self {
             id,
             version: 0,
+            intent_ids: Vec::new(),
+            check_ids: Vec::new(),
             uncommitted_events: Vec::new(),
         }
     }
@@ -110,7 +116,16 @@ impl AggregateRoot for Resolution {
         self.version
     }
 
-    fn apply(&mut self, _event: &Self::Event) {
+    fn apply(&mut self, event: &Self::Event) {
+        match &event.kind {
+            RulesEventKind::IntentResolved(payload) => {
+                self.intent_ids.push(payload.intent_id);
+            }
+            RulesEventKind::CheckPerformed(payload) => {
+                self.check_ids.push(payload.check_id);
+            }
+            RulesEventKind::EffectsProduced(_) => {}
+        }
         self.version += 1;
     }
 

@@ -1,12 +1,13 @@
 //! Routes for the World State bounded context.
 
-use axum::extract::State;
-use axum::{Json, Router, routing::post};
+use axum::extract::{Path, State};
+use axum::{Json, Router, routing::{get, post}};
 use serde::{Deserialize, Serialize};
 use tracing::{info, instrument};
 use uuid::Uuid;
 
-use otherworlds_world_state::application::command_handlers;
+use otherworlds_world_state::application::{command_handlers, query_handlers};
+use otherworlds_world_state::application::query_handlers::WorldSnapshotView;
 use otherworlds_world_state::domain::commands;
 
 use crate::error::ApiError;
@@ -124,9 +125,20 @@ async fn update_disposition(
     Ok(Json(CommandResponse { event_ids }))
 }
 
+/// GET /{`world_id`}
+#[instrument(skip(state), fields(world_id = %id))]
+async fn get_world_snapshot(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<WorldSnapshotView>, ApiError> {
+    let view = query_handlers::get_world_snapshot_by_id(id, &*state.event_repository).await?;
+    Ok(Json(view))
+}
+
 /// Returns the router for the world state context.
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route("/{world_id}", get(get_world_snapshot))
         .route("/apply-effect", post(apply_effect))
         .route("/set-flag", post(set_flag))
         .route("/update-disposition", post(update_disposition))
@@ -142,9 +154,11 @@ mod tests {
     use otherworlds_core::clock::Clock;
     use otherworlds_core::repository::EventRepository;
     use otherworlds_core::rng::DeterministicRng;
+    use otherworlds_core::repository::StoredEvent;
     use otherworlds_test_support::{
-        EmptyEventRepository, FailingEventRepository, FixedClock, MockRng,
+        EmptyEventRepository, FailingEventRepository, FixedClock, MockRng, RecordingEventRepository,
     };
+    use otherworlds_world_state::domain::events::{WorldFactChanged, WorldStateEventKind};
     use serde_json::Value;
     use sqlx::PgPool;
     use std::sync::{Arc, Mutex};
@@ -415,6 +429,104 @@ mod tests {
         let json: Value = serde_json::from_slice(&body_bytes).unwrap();
 
         assert_eq!(json["error"], "validation_error");
+    }
+
+    #[tokio::test]
+    async fn test_get_world_snapshot_returns_200_with_json() {
+        // Arrange
+        let world_id = Uuid::new_v4();
+        let fixed_now = chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 1, 15, 10, 0, 0).unwrap();
+        let events = vec![StoredEvent {
+            event_id: Uuid::new_v4(),
+            aggregate_id: world_id,
+            event_type: "world_state.world_fact_changed".to_owned(),
+            payload: serde_json::to_value(WorldStateEventKind::WorldFactChanged(
+                WorldFactChanged {
+                    world_id,
+                    fact_key: "quest_complete".to_owned(),
+                },
+            ))
+            .unwrap(),
+            sequence_number: 1,
+            correlation_id: Uuid::new_v4(),
+            causation_id: Uuid::new_v4(),
+            occurred_at: fixed_now,
+        }];
+        let repo = RecordingEventRepository::new(Ok(events));
+        let app = router().with_state(app_state_with(Arc::new(repo)));
+
+        let request = Request::builder()
+            .method("GET")
+            .uri(format!("/{world_id}"))
+            .body(Body::empty())
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        assert_eq!(json["world_id"], world_id.to_string());
+        assert_eq!(json["facts"], serde_json::json!(["quest_complete"]));
+        assert_eq!(json["version"], 1);
+    }
+
+    #[tokio::test]
+    async fn test_get_world_snapshot_returns_404_when_not_found() {
+        // Arrange
+        let app = router().with_state(test_app_state());
+        let world_id = Uuid::new_v4();
+
+        let request = Request::builder()
+            .method("GET")
+            .uri(format!("/{world_id}"))
+            .body(Body::empty())
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        assert_eq!(json["error"], "aggregate_not_found");
+    }
+
+    #[tokio::test]
+    async fn test_get_world_snapshot_returns_500_when_repository_fails() {
+        // Arrange
+        let app = router().with_state(failing_app_state());
+        let world_id = Uuid::new_v4();
+
+        let request = Request::builder()
+            .method("GET")
+            .uri(format!("/{world_id}"))
+            .body(Body::empty())
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        assert_eq!(json["error"], "infrastructure_error");
     }
 
     #[tokio::test]

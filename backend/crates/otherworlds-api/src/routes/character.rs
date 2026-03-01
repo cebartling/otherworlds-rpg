@@ -1,12 +1,13 @@
 //! Routes for the Character Management bounded context.
 
-use axum::extract::State;
-use axum::{Json, Router, routing::post};
+use axum::extract::{Path, State};
+use axum::{Json, Router, routing::{get, post}};
 use serde::{Deserialize, Serialize};
 use tracing::{info, instrument};
 use uuid::Uuid;
 
-use otherworlds_character::application::command_handlers;
+use otherworlds_character::application::{command_handlers, query_handlers};
+use otherworlds_character::application::query_handlers::CharacterView;
 use otherworlds_character::domain::commands;
 
 use crate::error::ApiError;
@@ -125,9 +126,20 @@ async fn award_experience(
     Ok(Json(CommandResponse { event_ids }))
 }
 
+/// GET /{`character_id`}
+#[instrument(skip(state), fields(character_id = %id))]
+async fn get_character(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<CharacterView>, ApiError> {
+    let view = query_handlers::get_character_by_id(id, &*state.event_repository).await?;
+    Ok(Json(view))
+}
+
 /// Returns the router for the character context.
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route("/{character_id}", get(get_character))
         .route("/create", post(create_character))
         .route("/modify-attribute", post(modify_attribute))
         .route("/award-experience", post(award_experience))
@@ -143,8 +155,10 @@ mod tests {
     use otherworlds_core::clock::Clock;
     use otherworlds_core::repository::EventRepository;
     use otherworlds_core::rng::DeterministicRng;
+    use otherworlds_character::domain::events::{CharacterCreated, CharacterEventKind};
+    use otherworlds_core::repository::StoredEvent;
     use otherworlds_test_support::{
-        EmptyEventRepository, FailingEventRepository, FixedClock, MockRng,
+        EmptyEventRepository, FailingEventRepository, FixedClock, MockRng, RecordingEventRepository,
     };
     use serde_json::Value;
     use sqlx::PgPool;
@@ -465,5 +479,104 @@ mod tests {
         let json: Value = serde_json::from_slice(&body_bytes).unwrap();
 
         assert_eq!(json["error"], "validation_error");
+    }
+
+    #[tokio::test]
+    async fn test_get_character_returns_200_with_json() {
+        // Arrange
+        let character_id = Uuid::new_v4();
+        let fixed_now = chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 1, 15, 10, 0, 0).unwrap();
+        let events = vec![StoredEvent {
+            event_id: Uuid::new_v4(),
+            aggregate_id: character_id,
+            event_type: "character.character_created".to_owned(),
+            payload: serde_json::to_value(CharacterEventKind::CharacterCreated(
+                CharacterCreated {
+                    character_id,
+                    name: "Alaric".to_owned(),
+                },
+            ))
+            .unwrap(),
+            sequence_number: 1,
+            correlation_id: Uuid::new_v4(),
+            causation_id: Uuid::new_v4(),
+            occurred_at: fixed_now,
+        }];
+        let repo = RecordingEventRepository::new(Ok(events));
+        let app = router().with_state(app_state_with(Arc::new(repo)));
+
+        let request = Request::builder()
+            .method("GET")
+            .uri(format!("/{character_id}"))
+            .body(Body::empty())
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        assert_eq!(json["character_id"], character_id.to_string());
+        assert_eq!(json["name"], "Alaric");
+        assert_eq!(json["version"], 1);
+        assert_eq!(json["experience"], 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_character_returns_404_when_not_found() {
+        // Arrange
+        let app = router().with_state(test_app_state());
+        let character_id = Uuid::new_v4();
+
+        let request = Request::builder()
+            .method("GET")
+            .uri(format!("/{character_id}"))
+            .body(Body::empty())
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        assert_eq!(json["error"], "aggregate_not_found");
+    }
+
+    #[tokio::test]
+    async fn test_get_character_returns_500_when_repository_fails() {
+        // Arrange
+        let app = router().with_state(failing_app_state());
+        let character_id = Uuid::new_v4();
+
+        let request = Request::builder()
+            .method("GET")
+            .uri(format!("/{character_id}"))
+            .body(Body::empty())
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        assert_eq!(json["error"], "infrastructure_error");
     }
 }

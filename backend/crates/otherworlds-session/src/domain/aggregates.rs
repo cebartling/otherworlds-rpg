@@ -17,7 +17,13 @@ pub struct CampaignRun {
     /// Aggregate identifier.
     pub id: Uuid,
     /// Current version (event count).
-    pub version: i64,
+    pub(crate) version: i64,
+    /// The campaign this run belongs to.
+    pub(crate) campaign_id: Option<Uuid>,
+    /// Checkpoint IDs created during this run.
+    pub(crate) checkpoint_ids: Vec<Uuid>,
+    /// Branch source: (`source_run_id`, `from_checkpoint_id`) if this run was branched.
+    pub(crate) branch_source: Option<(Uuid, Uuid)>,
     /// Uncommitted events pending persistence.
     uncommitted_events: Vec<SessionEvent>,
 }
@@ -29,6 +35,9 @@ impl CampaignRun {
         Self {
             id,
             version: 0,
+            campaign_id: None,
+            checkpoint_ids: Vec::new(),
+            branch_source: None,
             uncommitted_events: Vec::new(),
         }
     }
@@ -133,7 +142,19 @@ impl AggregateRoot for CampaignRun {
         self.version
     }
 
-    fn apply(&mut self, _event: &Self::Event) {
+    fn apply(&mut self, event: &Self::Event) {
+        match &event.kind {
+            SessionEventKind::CampaignRunStarted(payload) => {
+                self.campaign_id = Some(payload.campaign_id);
+            }
+            SessionEventKind::CheckpointCreated(payload) => {
+                self.checkpoint_ids.push(payload.checkpoint_id);
+            }
+            SessionEventKind::TimelineBranched(payload) => {
+                self.branch_source =
+                    Some((payload.source_run_id, payload.from_checkpoint_id));
+            }
+        }
         self.version += 1;
     }
 

@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::domain::aggregates::CampaignRun;
 use crate::domain::commands::{BranchTimeline, CreateCheckpoint, StartCampaignRun};
-use crate::domain::events::SessionEvent;
+use crate::domain::events::{SessionEvent, SessionEventKind};
 
 /// Result of a successfully handled command.
 #[derive(Debug)]
@@ -38,15 +38,35 @@ fn to_stored_event(event: &SessionEvent) -> StoredEvent {
 }
 
 /// Reconstitutes a `CampaignRun` from stored events.
-fn reconstitute(run_id: Uuid, existing_events: &[StoredEvent]) -> CampaignRun {
+///
+/// # Errors
+///
+/// Returns `DomainError::Infrastructure` if event deserialization fails.
+pub(crate) fn reconstitute(
+    run_id: Uuid,
+    existing_events: &[StoredEvent],
+) -> Result<CampaignRun, DomainError> {
     let mut run = CampaignRun::new(run_id);
-    // TODO: Deserialize each StoredEvent back to SessionEvent and call
-    // run.apply(&event) to rebuild full aggregate state. Currently only
-    // the version counter is reconstructed.
-    for _event in existing_events {
-        run.version += 1;
+    for stored in existing_events {
+        let kind: SessionEventKind =
+            serde_json::from_value(stored.payload.clone()).map_err(|e| {
+                DomainError::Infrastructure(format!("event deserialization failed: {e}"))
+            })?;
+        let event = SessionEvent {
+            metadata: otherworlds_core::event::EventMetadata {
+                event_id: stored.event_id,
+                event_type: stored.event_type.clone(),
+                aggregate_id: stored.aggregate_id,
+                sequence_number: stored.sequence_number,
+                correlation_id: stored.correlation_id,
+                causation_id: stored.causation_id,
+                occurred_at: stored.occurred_at,
+            },
+            kind,
+        };
+        run.apply(&event);
     }
-    run
+    Ok(run)
 }
 
 /// Handles the `StartCampaignRun` command: creates a new aggregate, starts the
@@ -95,7 +115,7 @@ pub async fn handle_create_checkpoint(
     if existing_events.is_empty() {
         return Err(DomainError::AggregateNotFound(command.run_id));
     }
-    let mut run = reconstitute(command.run_id, &existing_events);
+    let mut run = reconstitute(command.run_id, &existing_events)?;
 
     run.create_checkpoint(command.correlation_id, clock);
 
@@ -168,6 +188,7 @@ mod tests {
         handle_branch_timeline, handle_create_checkpoint, handle_start_campaign_run,
     };
     use crate::domain::commands::{BranchTimeline, CreateCheckpoint, StartCampaignRun};
+    use crate::domain::events::{CampaignRunStarted, SessionEventKind};
     use otherworlds_test_support::{FixedClock, RecordingEventRepository};
 
     #[tokio::test]
@@ -278,7 +299,13 @@ mod tests {
             event_id: Uuid::new_v4(),
             aggregate_id,
             event_type: "session.campaign_run_started".to_owned(),
-            payload: serde_json::json!({}),
+            payload: serde_json::to_value(SessionEventKind::CampaignRunStarted(
+                CampaignRunStarted {
+                    run_id: aggregate_id,
+                    campaign_id: Uuid::new_v4(),
+                },
+            ))
+            .unwrap(),
             sequence_number: 1,
             correlation_id: Uuid::new_v4(),
             causation_id: Uuid::new_v4(),

@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::domain::aggregates::Character;
 use crate::domain::commands::{AwardExperience, CreateCharacter, ModifyAttribute};
-use crate::domain::events::CharacterEvent;
+use crate::domain::events::{CharacterEvent, CharacterEventKind};
 
 fn to_stored_event(event: &CharacterEvent) -> StoredEvent {
     let meta = event.metadata();
@@ -29,12 +29,35 @@ fn to_stored_event(event: &CharacterEvent) -> StoredEvent {
 }
 
 /// Reconstitutes a `Character` from stored events.
-fn reconstitute(character_id: Uuid, existing_events: &[StoredEvent]) -> Character {
+///
+/// # Errors
+///
+/// Returns `DomainError::Infrastructure` if event deserialization fails.
+pub(crate) fn reconstitute(
+    character_id: Uuid,
+    existing_events: &[StoredEvent],
+) -> Result<Character, DomainError> {
     let mut character = Character::new(character_id);
-    #[allow(clippy::cast_possible_wrap)]
-    let version = existing_events.len() as i64;
-    character.version = version;
-    character
+    for stored in existing_events {
+        let kind: CharacterEventKind =
+            serde_json::from_value(stored.payload.clone()).map_err(|e| {
+                DomainError::Infrastructure(format!("event deserialization failed: {e}"))
+            })?;
+        let event = CharacterEvent {
+            metadata: otherworlds_core::event::EventMetadata {
+                event_id: stored.event_id,
+                event_type: stored.event_type.clone(),
+                aggregate_id: stored.aggregate_id,
+                sequence_number: stored.sequence_number,
+                correlation_id: stored.correlation_id,
+                causation_id: stored.causation_id,
+                occurred_at: stored.occurred_at,
+            },
+            kind,
+        };
+        character.apply(&event);
+    }
+    Ok(character)
 }
 
 /// Handles the `CreateCharacter` command: creates a fresh aggregate, applies
@@ -89,7 +112,7 @@ pub async fn handle_modify_attribute(
     }
 
     let existing_events = repo.load_events(command.character_id).await?;
-    let mut character = reconstitute(command.character_id, &existing_events);
+    let mut character = reconstitute(command.character_id, &existing_events)?;
 
     character.modify_attribute(
         command.attribute.clone(),
@@ -128,7 +151,7 @@ pub async fn handle_award_experience(
     }
 
     let existing_events = repo.load_events(command.character_id).await?;
-    let mut character = reconstitute(command.character_id, &existing_events);
+    let mut character = reconstitute(command.character_id, &existing_events)?;
 
     character.award_experience(command.amount, command.correlation_id, clock);
 

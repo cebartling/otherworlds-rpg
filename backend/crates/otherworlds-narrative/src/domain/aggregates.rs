@@ -13,7 +13,11 @@ pub struct NarrativeSession {
     /// Aggregate identifier.
     pub id: Uuid,
     /// Current version (event count).
-    pub version: i64,
+    pub(crate) version: i64,
+    /// The most recent beat ID.
+    pub(crate) current_beat_id: Option<Uuid>,
+    /// All choice IDs presented in this session.
+    pub(crate) choice_ids: Vec<Uuid>,
     /// Uncommitted events pending persistence.
     uncommitted_events: Vec<NarrativeEvent>,
 }
@@ -25,6 +29,8 @@ impl NarrativeSession {
         Self {
             id,
             version: 0,
+            current_beat_id: None,
+            choice_ids: Vec::new(),
             uncommitted_events: Vec::new(),
         }
     }
@@ -94,7 +100,16 @@ impl AggregateRoot for NarrativeSession {
         self.version
     }
 
-    fn apply(&mut self, _event: &Self::Event) {
+    fn apply(&mut self, event: &Self::Event) {
+        match &event.kind {
+            NarrativeEventKind::BeatAdvanced(payload) => {
+                self.current_beat_id = Some(payload.beat_id);
+            }
+            NarrativeEventKind::ChoicePresented(payload) => {
+                self.choice_ids.push(payload.choice_id);
+            }
+            NarrativeEventKind::SceneStarted(_) => {}
+        }
         self.version += 1;
     }
 

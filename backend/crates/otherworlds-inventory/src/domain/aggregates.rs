@@ -21,7 +21,7 @@ pub struct Inventory {
     /// Current version (event count).
     pub(crate) version: i64,
     /// Items currently in the inventory.
-    items: HashSet<Uuid>,
+    pub(crate) items: HashSet<Uuid>,
     /// Uncommitted events pending persistence.
     uncommitted_events: Vec<InventoryEvent>,
 }

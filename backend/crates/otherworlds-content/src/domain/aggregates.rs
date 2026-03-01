@@ -21,11 +21,11 @@ pub struct Campaign {
     /// Current version (event count).
     pub(crate) version: i64,
     /// Whether the campaign has been ingested.
-    ingested: bool,
+    pub(crate) ingested: bool,
     /// Whether the campaign has been validated.
-    validated: bool,
+    pub(crate) validated: bool,
     /// The campaign version hash (set on ingestion).
-    version_hash: Option<String>,
+    pub(crate) version_hash: Option<String>,
     /// Uncommitted events pending persistence.
     uncommitted_events: Vec<ContentEvent>,
 }

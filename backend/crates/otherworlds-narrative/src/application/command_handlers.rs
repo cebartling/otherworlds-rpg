@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::domain::aggregates::NarrativeSession;
 use crate::domain::commands::{AdvanceBeat, PresentChoice};
-use crate::domain::events::NarrativeEvent;
+use crate::domain::events::{NarrativeEvent, NarrativeEventKind};
 
 fn to_stored_event(event: &NarrativeEvent) -> StoredEvent {
     let meta = event.metadata();
@@ -29,12 +29,35 @@ fn to_stored_event(event: &NarrativeEvent) -> StoredEvent {
 }
 
 /// Reconstitutes a `NarrativeSession` from stored events.
-fn reconstitute(session_id: Uuid, existing_events: &[StoredEvent]) -> NarrativeSession {
+///
+/// # Errors
+///
+/// Returns `DomainError::Infrastructure` if event deserialization fails.
+pub(crate) fn reconstitute(
+    session_id: Uuid,
+    existing_events: &[StoredEvent],
+) -> Result<NarrativeSession, DomainError> {
     let mut session = NarrativeSession::new(session_id);
-    #[allow(clippy::cast_possible_wrap)]
-    let version = existing_events.len() as i64;
-    session.version = version;
-    session
+    for stored in existing_events {
+        let kind: NarrativeEventKind =
+            serde_json::from_value(stored.payload.clone()).map_err(|e| {
+                DomainError::Infrastructure(format!("event deserialization failed: {e}"))
+            })?;
+        let event = NarrativeEvent {
+            metadata: otherworlds_core::event::EventMetadata {
+                event_id: stored.event_id,
+                event_type: stored.event_type.clone(),
+                aggregate_id: stored.aggregate_id,
+                sequence_number: stored.sequence_number,
+                correlation_id: stored.correlation_id,
+                causation_id: stored.causation_id,
+                occurred_at: stored.occurred_at,
+            },
+            kind,
+        };
+        session.apply(&event);
+    }
+    Ok(session)
 }
 
 /// Handles the `AdvanceBeat` command: reconstitutes the aggregate, advances
@@ -49,7 +72,7 @@ pub async fn handle_advance_beat(
     repo: &dyn EventRepository,
 ) -> Result<Vec<StoredEvent>, DomainError> {
     let existing_events = repo.load_events(command.session_id).await?;
-    let mut session = reconstitute(command.session_id, &existing_events);
+    let mut session = reconstitute(command.session_id, &existing_events)?;
 
     session.advance_beat(command.correlation_id, clock);
 
@@ -77,7 +100,7 @@ pub async fn handle_present_choice(
     repo: &dyn EventRepository,
 ) -> Result<Vec<StoredEvent>, DomainError> {
     let existing_events = repo.load_events(command.session_id).await?;
-    let mut session = reconstitute(command.session_id, &existing_events);
+    let mut session = reconstitute(command.session_id, &existing_events)?;
 
     session.present_choice(command.correlation_id, clock);
 

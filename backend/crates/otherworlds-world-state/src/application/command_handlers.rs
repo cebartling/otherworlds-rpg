@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::domain::aggregates::WorldSnapshot;
 use crate::domain::commands::{ApplyEffect, SetFlag, UpdateDisposition};
-use crate::domain::events::WorldStateEvent;
+use crate::domain::events::{WorldStateEvent, WorldStateEventKind};
 
 fn to_stored_event(event: &WorldStateEvent) -> StoredEvent {
     let meta = event.metadata();
@@ -29,12 +29,35 @@ fn to_stored_event(event: &WorldStateEvent) -> StoredEvent {
 }
 
 /// Reconstitutes a `WorldSnapshot` from stored events.
-fn reconstitute(world_id: Uuid, existing_events: &[StoredEvent]) -> WorldSnapshot {
+///
+/// # Errors
+///
+/// Returns `DomainError::Infrastructure` if event deserialization fails.
+pub(crate) fn reconstitute(
+    world_id: Uuid,
+    existing_events: &[StoredEvent],
+) -> Result<WorldSnapshot, DomainError> {
     let mut snapshot = WorldSnapshot::new(world_id);
-    #[allow(clippy::cast_possible_wrap)]
-    let version = existing_events.len() as i64;
-    snapshot.version = version;
-    snapshot
+    for stored in existing_events {
+        let kind: WorldStateEventKind =
+            serde_json::from_value(stored.payload.clone()).map_err(|e| {
+                DomainError::Infrastructure(format!("event deserialization failed: {e}"))
+            })?;
+        let event = WorldStateEvent {
+            metadata: otherworlds_core::event::EventMetadata {
+                event_id: stored.event_id,
+                event_type: stored.event_type.clone(),
+                aggregate_id: stored.aggregate_id,
+                sequence_number: stored.sequence_number,
+                correlation_id: stored.correlation_id,
+                causation_id: stored.causation_id,
+                occurred_at: stored.occurred_at,
+            },
+            kind,
+        };
+        snapshot.apply(&event);
+    }
+    Ok(snapshot)
 }
 
 /// Handles the `ApplyEffect` command: reconstitutes the aggregate, applies
@@ -53,7 +76,7 @@ pub async fn handle_apply_effect(
     }
 
     let existing_events = repo.load_events(command.world_id).await?;
-    let mut snapshot = reconstitute(command.world_id, &existing_events);
+    let mut snapshot = reconstitute(command.world_id, &existing_events)?;
 
     snapshot.apply_effect(command.fact_key.clone(), command.correlation_id, clock);
 
@@ -85,7 +108,7 @@ pub async fn handle_set_flag(
     }
 
     let existing_events = repo.load_events(command.world_id).await?;
-    let mut snapshot = reconstitute(command.world_id, &existing_events);
+    let mut snapshot = reconstitute(command.world_id, &existing_events)?;
 
     snapshot.set_flag(
         command.flag_key.clone(),
@@ -118,7 +141,7 @@ pub async fn handle_update_disposition(
     repo: &dyn EventRepository,
 ) -> Result<Vec<StoredEvent>, DomainError> {
     let existing_events = repo.load_events(command.world_id).await?;
-    let mut snapshot = reconstitute(command.world_id, &existing_events);
+    let mut snapshot = reconstitute(command.world_id, &existing_events)?;
 
     snapshot.update_disposition(command.entity_id, command.correlation_id, clock);
 

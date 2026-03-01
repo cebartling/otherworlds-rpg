@@ -1,12 +1,13 @@
 //! Routes for the Content Authoring bounded context.
 
-use axum::extract::State;
-use axum::{Json, Router, routing::post};
+use axum::extract::{Path, State};
+use axum::{Json, Router, routing::{get, post}};
 use serde::{Deserialize, Serialize};
 use tracing::{info, instrument};
 use uuid::Uuid;
 
-use otherworlds_content::application::command_handlers;
+use otherworlds_content::application::{command_handlers, query_handlers};
+use otherworlds_content::application::query_handlers::CampaignView;
 use otherworlds_content::domain::commands;
 
 use crate::error::ApiError;
@@ -40,6 +41,16 @@ pub struct CommandResponse {
     pub aggregate_id: Uuid,
     /// IDs of the domain events produced and persisted.
     pub event_ids: Vec<Uuid>,
+}
+
+/// GET /{`campaign_id`}
+#[instrument(skip(state), fields(campaign_id = %id))]
+async fn get_campaign(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<CampaignView>, ApiError> {
+    let view = query_handlers::get_campaign_by_id(id, &*state.event_repository).await?;
+    Ok(Json(view))
 }
 
 /// POST /ingest-campaign
@@ -129,6 +140,7 @@ async fn compile_campaign(
 /// Returns the router for the content context.
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route("/{campaign_id}", get(get_campaign))
         .route("/ingest-campaign", post(ingest_campaign))
         .route("/validate-campaign", post(validate_campaign))
         .route("/compile-campaign", post(compile_campaign))
@@ -522,5 +534,87 @@ mod tests {
         let json: Value = serde_json::from_slice(&body_bytes).unwrap();
 
         assert_eq!(json["error"], "validation_error");
+    }
+
+    #[tokio::test]
+    async fn test_get_campaign_returns_200_with_json() {
+        // Arrange
+        let app = router().with_state(test_app_state());
+        let campaign_id = Uuid::new_v4();
+
+        let request = Request::builder()
+            .method("GET")
+            .uri(format!("/{campaign_id}"))
+            .body(Body::empty())
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        let returned_id = Uuid::parse_str(json["campaign_id"].as_str().unwrap()).unwrap();
+        assert_eq!(returned_id, campaign_id);
+        assert_eq!(json["ingested"], true);
+        assert_eq!(json["validated"], true);
+        assert_eq!(json["version"], 2);
+    }
+
+    #[tokio::test]
+    async fn test_get_campaign_returns_404_when_not_found() {
+        // Arrange
+        let app = router().with_state(empty_app_state());
+        let campaign_id = Uuid::new_v4();
+
+        let request = Request::builder()
+            .method("GET")
+            .uri(format!("/{campaign_id}"))
+            .body(Body::empty())
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        assert_eq!(json["error"], "aggregate_not_found");
+    }
+
+    #[tokio::test]
+    async fn test_get_campaign_returns_500_when_repository_fails() {
+        // Arrange
+        let app = router().with_state(failing_app_state());
+        let campaign_id = Uuid::new_v4();
+
+        let request = Request::builder()
+            .method("GET")
+            .uri(format!("/{campaign_id}"))
+            .body(Body::empty())
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        assert_eq!(json["error"], "infrastructure_error");
     }
 }

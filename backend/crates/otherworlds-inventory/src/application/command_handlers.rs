@@ -42,7 +42,7 @@ fn to_stored_event(event: &InventoryEvent) -> StoredEvent {
 /// # Errors
 ///
 /// Returns `DomainError::Infrastructure` if event deserialization fails.
-fn reconstitute(
+pub(crate) fn reconstitute(
     inventory_id: Uuid,
     existing_events: &[StoredEvent],
 ) -> Result<Inventory, DomainError> {
