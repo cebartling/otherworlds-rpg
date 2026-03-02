@@ -64,9 +64,9 @@ async fn test_rules_full_resolution_lifecycle(pool: PgPool) {
     .await;
     assert_eq!(status, StatusCode::OK);
 
-    // Step 2: resolve-check (needs RNG for d20 roll + check_id generation)
-    // SequenceRng values: d20 roll (15), then four u32s for check_id via RNG
-    let rng = SequenceRng::new(vec![15, 42, 99, 7, 13]);
+    // Step 2: resolve-check (needs RNG for d20 roll + check_id + event_id)
+    // SequenceRng values: d20 roll (15), four u32s for check_id, four u32s for event_id
+    let rng = SequenceRng::new(vec![15, 42, 99, 7, 13, 1, 2, 3, 4]);
     let app = common::build_test_app_with_rng(pool.clone(), rng);
     let (status, json) = common::post_json(
         app,
@@ -167,4 +167,141 @@ async fn test_rules_list_resolutions_includes_created_resolution(pool: PgPool) {
             .iter()
             .any(|r| r["resolution_id"] == resolution_id.to_string())
     );
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn test_rules_archive_resolution_round_trip(pool: PgPool) {
+    let resolution_id = Uuid::new_v4();
+    let intent_id = Uuid::new_v4();
+
+    // Step 1: declare-intent
+    let app = common::build_test_app(pool.clone());
+    let (status, _) = common::post_json(
+        app,
+        "/api/v1/rules/declare-intent",
+        &serde_json::json!({
+            "resolution_id": resolution_id,
+            "intent_id": intent_id,
+            "action_type": "skill_check",
+            "difficulty_class": 15,
+            "modifier": 3
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Step 2: DELETE /api/v1/rules/{resolution_id}
+    let app = common::build_test_app(pool.clone());
+    let (status, json) =
+        common::delete_json(app, &format!("/api/v1/rules/{resolution_id}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["event_ids"].as_array().unwrap().len(), 1);
+
+    // Step 3: GET — verify version incremented
+    let app = common::build_test_app(pool);
+    let (status, json) = common::get_json(app, &format!("/api/v1/rules/{resolution_id}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["version"], 2);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn test_rules_archive_excludes_from_list(pool: PgPool) {
+    let resolution_id_a = Uuid::new_v4();
+    let intent_id_a = Uuid::new_v4();
+    let resolution_id_b = Uuid::new_v4();
+    let intent_id_b = Uuid::new_v4();
+
+    // Create resolution_a
+    let app = common::build_test_app(pool.clone());
+    let (status, _) = common::post_json(
+        app,
+        "/api/v1/rules/declare-intent",
+        &serde_json::json!({
+            "resolution_id": resolution_id_a,
+            "intent_id": intent_id_a,
+            "action_type": "skill_check",
+            "difficulty_class": 15,
+            "modifier": 3
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Create resolution_b
+    let app = common::build_test_app(pool.clone());
+    let (status, _) = common::post_json(
+        app,
+        "/api/v1/rules/declare-intent",
+        &serde_json::json!({
+            "resolution_id": resolution_id_b,
+            "intent_id": intent_id_b,
+            "action_type": "skill_check",
+            "difficulty_class": 15,
+            "modifier": 3
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Archive resolution_a
+    let app = common::build_test_app(pool.clone());
+    let (status, _) =
+        common::delete_json(app, &format!("/api/v1/rules/{resolution_id_a}")).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // GET /api/v1/rules — resolution_a should NOT be in list, resolution_b should be
+    let app = common::build_test_app(pool);
+    let (status, json) = common::get_json(app, "/api/v1/rules").await;
+    assert_eq!(status, StatusCode::OK);
+    let resolutions = json.as_array().unwrap();
+    assert!(
+        !resolutions
+            .iter()
+            .any(|r| r["resolution_id"] == resolution_id_a.to_string())
+    );
+    assert!(
+        resolutions
+            .iter()
+            .any(|r| r["resolution_id"] == resolution_id_b.to_string())
+    );
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn test_rules_command_on_archived_returns_error(pool: PgPool) {
+    let resolution_id = Uuid::new_v4();
+    let intent_id = Uuid::new_v4();
+
+    // Step 1: declare-intent
+    let app = common::build_test_app(pool.clone());
+    let (status, _) = common::post_json(
+        app,
+        "/api/v1/rules/declare-intent",
+        &serde_json::json!({
+            "resolution_id": resolution_id,
+            "intent_id": intent_id,
+            "action_type": "skill_check",
+            "difficulty_class": 15,
+            "modifier": 3
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Step 2: archive the resolution
+    let app = common::build_test_app(pool.clone());
+    let (status, _) =
+        common::delete_json(app, &format!("/api/v1/rules/{resolution_id}")).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Step 3: attempt resolve-check on archived resolution — should fail
+    let rng = SequenceRng::new(vec![15, 42, 99, 7, 13]);
+    let app = common::build_test_app_with_rng(pool, rng);
+    let (status, json) = common::post_json(
+        app,
+        "/api/v1/rules/resolve-check",
+        &serde_json::json!({ "resolution_id": resolution_id }),
+    )
+    .await;
+    assert_ne!(status, StatusCode::OK);
+    assert!(json.get("error").is_some());
 }

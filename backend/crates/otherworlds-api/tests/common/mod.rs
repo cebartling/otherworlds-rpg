@@ -1,6 +1,7 @@
 //! Shared test helpers for API integration tests.
 #![allow(dead_code)]
 
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use axum::Router;
@@ -14,6 +15,10 @@ use otherworlds_test_support::{FixedClock, SequenceRng};
 use sqlx::PgPool;
 use tower::ServiceExt;
 
+/// Global counter ensuring each `build_test_app` call gets a unique RNG range,
+/// preventing duplicate `event_id` UUIDs across requests within the same test.
+static RNG_OFFSET: AtomicU32 = AtomicU32::new(1);
+
 use otherworlds_api::routes;
 use otherworlds_api::state::AppState;
 
@@ -26,8 +31,14 @@ fn fixed_clock() -> Arc<dyn Clock + Send + Sync> {
 
 /// Build the full app router with a real `PgEventRepository` and deterministic
 /// Clock/RNG. Uses the same route structure as `main.rs`.
+///
+/// Each call gets a unique RNG range (100 values starting from a global offset)
+/// so that event IDs are unique across multiple `build_test_app` invocations
+/// within the same test.
 pub fn build_test_app(pool: PgPool) -> Router {
-    build_test_app_with_rng(pool, SequenceRng::new(vec![]))
+    let start = RNG_OFFSET.fetch_add(100, Ordering::Relaxed);
+    let values: Vec<u32> = (start..start + 100).collect();
+    build_test_app_with_rng(pool, SequenceRng::new(values))
 }
 
 /// Build the full app router with a custom `SequenceRng` for tests that need
@@ -61,6 +72,22 @@ pub async fn post_json(
         .uri(uri)
         .header("content-type", "application/json")
         .body(Body::from(serde_json::to_vec(body).unwrap()))
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    let status = response.status();
+    let body_bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+
+    (status, json)
+}
+
+/// Send a DELETE request and return the response.
+pub async fn delete_json(app: Router, uri: &str) -> (StatusCode, serde_json::Value) {
+    let request = Request::builder()
+        .method("DELETE")
+        .uri(uri)
+        .body(Body::empty())
         .unwrap();
 
     let response = app.oneshot(request).await.unwrap();

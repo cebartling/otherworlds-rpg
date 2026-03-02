@@ -129,3 +129,90 @@ async fn test_inventory_list_includes_seeded_inventory(pool: PgPool) {
             .any(|i| i["inventory_id"] == inventory_id.to_string())
     );
 }
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn test_inventory_archive_round_trip(pool: PgPool) {
+    let inventory_id = Uuid::new_v4();
+    let item_id = Uuid::new_v4();
+
+    seed_inventory(&pool, inventory_id, item_id).await;
+
+    // DELETE /api/v1/inventory/{inventory_id}
+    let app = common::build_test_app(pool.clone());
+    let (status, json) =
+        common::delete_json(app, &format!("/api/v1/inventory/{inventory_id}")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["aggregate_id"], inventory_id.to_string());
+    assert_eq!(json["event_ids"].as_array().unwrap().len(), 1);
+
+    // GET — verify version bumped
+    let app = common::build_test_app(pool);
+    let (status, json) = common::get_json(app, &format!("/api/v1/inventory/{inventory_id}")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["version"], 2);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn test_inventory_archive_excludes_from_list(pool: PgPool) {
+    let inventory_a = Uuid::new_v4();
+    let item_a = Uuid::new_v4();
+    let inventory_b = Uuid::new_v4();
+    let item_b = Uuid::new_v4();
+
+    seed_inventory(&pool, inventory_a, item_a).await;
+    seed_inventory(&pool, inventory_b, item_b).await;
+
+    // Archive inventory_a
+    let app = common::build_test_app(pool.clone());
+    let (status, _) = common::delete_json(app, &format!("/api/v1/inventory/{inventory_a}")).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // GET /api/v1/inventory — inventory_a should be excluded, inventory_b present
+    let app = common::build_test_app(pool);
+    let (status, json) = common::get_json(app, "/api/v1/inventory").await;
+
+    assert_eq!(status, StatusCode::OK);
+    let inventories = json.as_array().unwrap();
+    assert!(
+        !inventories
+            .iter()
+            .any(|i| i["inventory_id"] == inventory_a.to_string())
+    );
+    assert!(
+        inventories
+            .iter()
+            .any(|i| i["inventory_id"] == inventory_b.to_string())
+    );
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn test_inventory_command_on_archived_returns_error(pool: PgPool) {
+    let inventory_id = Uuid::new_v4();
+    let item_id = Uuid::new_v4();
+    let new_item_id = Uuid::new_v4();
+
+    seed_inventory(&pool, inventory_id, item_id).await;
+
+    // Archive the inventory
+    let app = common::build_test_app(pool.clone());
+    let (status, _) =
+        common::delete_json(app, &format!("/api/v1/inventory/{inventory_id}")).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // POST add-item on archived inventory — should fail
+    let app = common::build_test_app(pool);
+    let (status, json) = common::post_json(
+        app,
+        "/api/v1/inventory/add-item",
+        &serde_json::json!({
+            "inventory_id": inventory_id,
+            "item_id": new_item_id
+        }),
+    )
+    .await;
+
+    assert_ne!(status, StatusCode::OK);
+    assert!(json.get("error").is_some());
+}

@@ -125,3 +125,147 @@ async fn test_character_list_includes_created_character(pool: PgPool) {
             .any(|c| c["character_id"] == character_id.to_string())
     );
 }
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn test_character_archive_round_trip(pool: PgPool) {
+    let app = common::build_test_app(pool.clone());
+    let (status, json) = common::post_json(
+        app,
+        "/api/v1/characters/create",
+        &serde_json::json!({ "name": "Doomed" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let event_id: Uuid = json["event_ids"][0].as_str().unwrap().parse().unwrap();
+    let character_id = aggregate_id_from_event(&pool, event_id).await;
+
+    let app = common::build_test_app(pool.clone());
+    let (status, json) = common::delete_json(
+        app,
+        &format!("/api/v1/characters/{character_id}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["event_ids"].as_array().unwrap().len(), 1);
+
+    let app = common::build_test_app(pool);
+    let (status, json) = common::get_json(app, &format!("/api/v1/characters/{character_id}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["version"], 2);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn test_character_archive_excludes_from_list(pool: PgPool) {
+    let app = common::build_test_app(pool.clone());
+    let (status, json) = common::post_json(
+        app,
+        "/api/v1/characters/create",
+        &serde_json::json!({ "name": "Alice" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let event_id: Uuid = json["event_ids"][0].as_str().unwrap().parse().unwrap();
+    let character_a = aggregate_id_from_event(&pool, event_id).await;
+
+    let app = common::build_test_app(pool.clone());
+    let (status, json) = common::post_json(
+        app,
+        "/api/v1/characters/create",
+        &serde_json::json!({ "name": "Bob" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let event_id: Uuid = json["event_ids"][0].as_str().unwrap().parse().unwrap();
+    let character_b = aggregate_id_from_event(&pool, event_id).await;
+
+    let app = common::build_test_app(pool.clone());
+    let (status, _json) = common::delete_json(
+        app,
+        &format!("/api/v1/characters/{character_a}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let app = common::build_test_app(pool);
+    let (status, json) = common::get_json(app, "/api/v1/characters").await;
+    assert_eq!(status, StatusCode::OK);
+    let characters = json.as_array().unwrap();
+    assert!(
+        !characters
+            .iter()
+            .any(|c| c["character_id"] == character_a.to_string())
+    );
+    assert!(
+        characters
+            .iter()
+            .any(|c| c["character_id"] == character_b.to_string())
+    );
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn test_character_award_experience_round_trip(pool: PgPool) {
+    let app = common::build_test_app(pool.clone());
+    let (status, json) = common::post_json(
+        app,
+        "/api/v1/characters/create",
+        &serde_json::json!({ "name": "Learner" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let event_id: Uuid = json["event_ids"][0].as_str().unwrap().parse().unwrap();
+    let character_id = aggregate_id_from_event(&pool, event_id).await;
+
+    let app = common::build_test_app(pool.clone());
+    let (status, _json) = common::post_json(
+        app,
+        "/api/v1/characters/award-experience",
+        &serde_json::json!({
+            "character_id": character_id,
+            "amount": 250
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let app = common::build_test_app(pool);
+    let (status, json) = common::get_json(app, &format!("/api/v1/characters/{character_id}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["experience"], 250);
+    assert_eq!(json["version"], 2);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn test_character_command_on_archived_returns_error(pool: PgPool) {
+    let app = common::build_test_app(pool.clone());
+    let (status, json) = common::post_json(
+        app,
+        "/api/v1/characters/create",
+        &serde_json::json!({ "name": "Doomed" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let event_id: Uuid = json["event_ids"][0].as_str().unwrap().parse().unwrap();
+    let character_id = aggregate_id_from_event(&pool, event_id).await;
+
+    let app = common::build_test_app(pool.clone());
+    let (status, _json) = common::delete_json(
+        app,
+        &format!("/api/v1/characters/{character_id}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let app = common::build_test_app(pool);
+    let (status, json) = common::post_json(
+        app,
+        "/api/v1/characters/modify-attribute",
+        &serde_json::json!({
+            "character_id": character_id,
+            "attribute": "strength",
+            "new_value": 10
+        }),
+    )
+    .await;
+    assert_ne!(status, StatusCode::OK);
+    assert!(json.get("error").is_some());
+}

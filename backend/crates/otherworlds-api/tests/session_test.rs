@@ -102,3 +102,147 @@ async fn test_session_list_includes_started_run(pool: PgPool) {
     let runs = json.as_array().unwrap();
     assert!(runs.iter().any(|r| r["run_id"] == run_id.to_string()));
 }
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn test_session_archive_campaign_run_round_trip(pool: PgPool) {
+    let campaign_id = Uuid::new_v4();
+
+    let app = common::build_test_app(pool.clone());
+    let (status, json) = common::post_json(
+        app,
+        "/api/v1/sessions/start-campaign-run",
+        &serde_json::json!({ "campaign_id": campaign_id }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let run_id: Uuid = json["aggregate_id"].as_str().unwrap().parse().unwrap();
+
+    let app = common::build_test_app(pool.clone());
+    let (status, json) =
+        common::delete_json(app, &format!("/api/v1/sessions/{run_id}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["event_ids"].as_array().unwrap().len(), 1);
+
+    let app = common::build_test_app(pool);
+    let (status, json) = common::get_json(app, &format!("/api/v1/sessions/{run_id}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["version"], 2);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn test_session_archive_excludes_from_list(pool: PgPool) {
+    let campaign_id_a = Uuid::new_v4();
+    let campaign_id_b = Uuid::new_v4();
+
+    let app = common::build_test_app(pool.clone());
+    let (status, json) = common::post_json(
+        app,
+        "/api/v1/sessions/start-campaign-run",
+        &serde_json::json!({ "campaign_id": campaign_id_a }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let run_a: Uuid = json["aggregate_id"].as_str().unwrap().parse().unwrap();
+
+    let app = common::build_test_app(pool.clone());
+    let (status, json) = common::post_json(
+        app,
+        "/api/v1/sessions/start-campaign-run",
+        &serde_json::json!({ "campaign_id": campaign_id_b }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let run_b: Uuid = json["aggregate_id"].as_str().unwrap().parse().unwrap();
+
+    let app = common::build_test_app(pool.clone());
+    let (status, _json) =
+        common::delete_json(app, &format!("/api/v1/sessions/{run_a}")).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let app = common::build_test_app(pool);
+    let (status, json) = common::get_json(app, "/api/v1/sessions").await;
+    assert_eq!(status, StatusCode::OK);
+    let runs = json.as_array().unwrap();
+    assert!(!runs.iter().any(|r| r["run_id"] == run_a.to_string()));
+    assert!(runs.iter().any(|r| r["run_id"] == run_b.to_string()));
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn test_session_branch_timeline_round_trip(pool: PgPool) {
+    let campaign_id = Uuid::new_v4();
+
+    let app = common::build_test_app(pool.clone());
+    let (status, json) = common::post_json(
+        app,
+        "/api/v1/sessions/start-campaign-run",
+        &serde_json::json!({ "campaign_id": campaign_id }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let run_id: Uuid = json["aggregate_id"].as_str().unwrap().parse().unwrap();
+
+    let app = common::build_test_app(pool.clone());
+    let (status, _json) = common::post_json(
+        app,
+        "/api/v1/sessions/create-checkpoint",
+        &serde_json::json!({ "run_id": run_id }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let app = common::build_test_app(pool.clone());
+    let (status, json) = common::get_json(app, &format!("/api/v1/sessions/{run_id}")).await;
+    assert_eq!(status, StatusCode::OK);
+    let checkpoint_ids = json["checkpoint_ids"].as_array().unwrap();
+    assert_eq!(checkpoint_ids.len(), 1);
+    let checkpoint_id = checkpoint_ids[0].as_str().unwrap();
+
+    let app = common::build_test_app(pool.clone());
+    let (status, json) = common::post_json(
+        app,
+        "/api/v1/sessions/branch-timeline",
+        &serde_json::json!({
+            "source_run_id": run_id,
+            "from_checkpoint_id": checkpoint_id
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let branch_run_id: Uuid = json["aggregate_id"].as_str().unwrap().parse().unwrap();
+
+    let app = common::build_test_app(pool);
+    let (status, json) =
+        common::get_json(app, &format!("/api/v1/sessions/{branch_run_id}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["version"], 1);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn test_session_command_on_archived_returns_error(pool: PgPool) {
+    let campaign_id = Uuid::new_v4();
+
+    let app = common::build_test_app(pool.clone());
+    let (status, json) = common::post_json(
+        app,
+        "/api/v1/sessions/start-campaign-run",
+        &serde_json::json!({ "campaign_id": campaign_id }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let run_id: Uuid = json["aggregate_id"].as_str().unwrap().parse().unwrap();
+
+    let app = common::build_test_app(pool.clone());
+    let (status, _json) =
+        common::delete_json(app, &format!("/api/v1/sessions/{run_id}")).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let app = common::build_test_app(pool);
+    let (status, json) = common::post_json(
+        app,
+        "/api/v1/sessions/create-checkpoint",
+        &serde_json::json!({ "run_id": run_id }),
+    )
+    .await;
+    assert_ne!(status, StatusCode::OK);
+    assert!(json.get("error").is_some());
+}

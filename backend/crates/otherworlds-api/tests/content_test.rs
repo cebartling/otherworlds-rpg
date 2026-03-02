@@ -109,3 +109,144 @@ async fn test_content_list_includes_ingested_campaign(pool: PgPool) {
             .any(|c| c["campaign_id"] == campaign_id.to_string())
     );
 }
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn test_content_archive_campaign_round_trip(pool: PgPool) {
+    let app = common::build_test_app(pool.clone());
+    let (status, json) = common::post_json(
+        app,
+        "/api/v1/content/ingest-campaign",
+        &serde_json::json!({
+            "source": "# Archive Test\n\nContent."
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let campaign_id: Uuid = json["aggregate_id"].as_str().unwrap().parse().unwrap();
+
+    let app = common::build_test_app(pool.clone());
+    let (status, json) =
+        common::delete_json(app, &format!("/api/v1/content/{campaign_id}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["event_ids"].as_array().unwrap().len(), 1);
+
+    let app = common::build_test_app(pool);
+    let (status, json) = common::get_json(app, &format!("/api/v1/content/{campaign_id}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["version"], 2);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn test_content_archive_excludes_from_list(pool: PgPool) {
+    let app = common::build_test_app(pool.clone());
+    let (status, json) = common::post_json(
+        app,
+        "/api/v1/content/ingest-campaign",
+        &serde_json::json!({
+            "source": "# Campaign A\n\nFirst campaign."
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let campaign_a: Uuid = json["aggregate_id"].as_str().unwrap().parse().unwrap();
+
+    let app = common::build_test_app(pool.clone());
+    let (status, json) = common::post_json(
+        app,
+        "/api/v1/content/ingest-campaign",
+        &serde_json::json!({
+            "source": "# Campaign B\n\nSecond campaign."
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let campaign_b: Uuid = json["aggregate_id"].as_str().unwrap().parse().unwrap();
+
+    let app = common::build_test_app(pool.clone());
+    let (status, _json) =
+        common::delete_json(app, &format!("/api/v1/content/{campaign_a}")).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let app = common::build_test_app(pool);
+    let (status, json) = common::get_json(app, "/api/v1/content").await;
+    assert_eq!(status, StatusCode::OK);
+    let campaigns = json.as_array().unwrap();
+    assert!(
+        !campaigns
+            .iter()
+            .any(|c| c["campaign_id"] == campaign_a.to_string())
+    );
+    assert!(
+        campaigns
+            .iter()
+            .any(|c| c["campaign_id"] == campaign_b.to_string())
+    );
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn test_content_full_lifecycle_ingest_validate_compile(pool: PgPool) {
+    let app = common::build_test_app(pool.clone());
+    let (status, json) = common::post_json(
+        app,
+        "/api/v1/content/ingest-campaign",
+        &serde_json::json!({
+            "source": "# Full Lifecycle\n\nContent."
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let campaign_id: Uuid = json["aggregate_id"].as_str().unwrap().parse().unwrap();
+
+    let app = common::build_test_app(pool.clone());
+    let (status, _json) = common::post_json(
+        app,
+        "/api/v1/content/validate-campaign",
+        &serde_json::json!({ "campaign_id": campaign_id }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let app = common::build_test_app(pool.clone());
+    let (status, _json) = common::post_json(
+        app,
+        "/api/v1/content/compile-campaign",
+        &serde_json::json!({ "campaign_id": campaign_id }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let app = common::build_test_app(pool);
+    let (status, json) = common::get_json(app, &format!("/api/v1/content/{campaign_id}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["version"], 3);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn test_content_command_on_archived_returns_error(pool: PgPool) {
+    let app = common::build_test_app(pool.clone());
+    let (status, json) = common::post_json(
+        app,
+        "/api/v1/content/ingest-campaign",
+        &serde_json::json!({
+            "source": "# Archived Campaign\n\nContent."
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let campaign_id: Uuid = json["aggregate_id"].as_str().unwrap().parse().unwrap();
+
+    let app = common::build_test_app(pool.clone());
+    let (status, _json) =
+        common::delete_json(app, &format!("/api/v1/content/{campaign_id}")).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let app = common::build_test_app(pool);
+    let (status, json) = common::post_json(
+        app,
+        "/api/v1/content/validate-campaign",
+        &serde_json::json!({ "campaign_id": campaign_id }),
+    )
+    .await;
+    assert_ne!(status, StatusCode::OK);
+    assert!(json.get("error").is_some());
+}
