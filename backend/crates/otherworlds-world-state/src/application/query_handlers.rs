@@ -32,6 +32,7 @@ const EVENT_TYPES: &[&str] = &[
     "world_state.world_fact_changed",
     "world_state.flag_set",
     "world_state.disposition_updated",
+    "world_state.world_snapshot_archived",
 ];
 
 /// Summary view for listing world snapshots.
@@ -63,6 +64,9 @@ pub async fn list_world_snapshots(
             continue;
         }
         let snapshot = command_handlers::reconstitute(id, &stored_events)?;
+        if snapshot.archived {
+            continue;
+        }
         summaries.push(WorldSnapshotSummary {
             world_id: id,
             fact_count: snapshot.facts.len(),
@@ -105,7 +109,9 @@ mod tests {
     use uuid::Uuid;
 
     use crate::application::query_handlers::{get_world_snapshot_by_id, list_world_snapshots};
-    use crate::domain::events::{FlagSet, WorldFactChanged, WorldStateEventKind};
+    use crate::domain::events::{
+        FlagSet, WorldFactChanged, WorldSnapshotArchived, WorldStateEventKind,
+    };
     use otherworlds_test_support::{EmptyEventRepository, RecordingEventRepository};
 
     #[tokio::test]
@@ -216,5 +222,48 @@ mod tests {
         assert_eq!(result[0].fact_count, 1);
         assert_eq!(result[0].flag_count, 0);
         assert_eq!(result[0].version, 1);
+    }
+
+    #[tokio::test]
+    async fn test_list_world_snapshots_excludes_archived() {
+        let world_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+
+        let events = vec![
+            StoredEvent {
+                event_id: Uuid::new_v4(),
+                aggregate_id: world_id,
+                event_type: "world_state.world_fact_changed".to_owned(),
+                payload: serde_json::to_value(WorldStateEventKind::WorldFactChanged(
+                    WorldFactChanged {
+                        world_id,
+                        fact_key: "quest_complete".to_owned(),
+                    },
+                ))
+                .unwrap(),
+                sequence_number: 1,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+            StoredEvent {
+                event_id: Uuid::new_v4(),
+                aggregate_id: world_id,
+                event_type: "world_state.world_snapshot_archived".to_owned(),
+                payload: serde_json::to_value(WorldStateEventKind::WorldSnapshotArchived(
+                    WorldSnapshotArchived { world_id },
+                ))
+                .unwrap(),
+                sequence_number: 2,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+        ];
+        let repo = RecordingEventRepository::with_aggregate_ids(Ok(events), vec![world_id]);
+
+        let result = list_world_snapshots(&repo).await.unwrap();
+
+        assert!(result.is_empty());
     }
 }

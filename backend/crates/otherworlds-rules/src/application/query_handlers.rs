@@ -77,6 +77,7 @@ const EVENT_TYPES: &[&str] = &[
     "rules.intent_declared",
     "rules.check_resolved",
     "rules.effects_produced",
+    "rules.resolution_archived",
 ];
 
 /// Summary view for listing resolutions.
@@ -106,6 +107,9 @@ pub async fn list_resolutions(
             continue;
         }
         let resolution = command_handlers::reconstitute(id, &stored_events)?;
+        if resolution.archived {
+            continue;
+        }
         summaries.push(ResolutionSummary {
             resolution_id: id,
             phase: resolution.phase_name().to_owned(),
@@ -180,8 +184,8 @@ mod tests {
 
     use crate::application::query_handlers::{get_resolution_by_id, list_resolutions};
     use crate::domain::events::{
-        CheckOutcome, CheckResolved, EffectsProduced, IntentDeclared, ResolvedEffect,
-        RulesEventKind,
+        CheckOutcome, CheckResolved, EffectsProduced, IntentDeclared, ResolutionArchived,
+        ResolvedEffect, RulesEventKind,
     };
     use otherworlds_test_support::{EmptyEventRepository, RecordingEventRepository};
 
@@ -353,5 +357,31 @@ mod tests {
         assert_eq!(result[0].resolution_id, resolution_id);
         assert_eq!(result[0].phase, "intent_declared");
         assert_eq!(result[0].version, 1);
+    }
+
+    #[tokio::test]
+    async fn test_list_resolutions_excludes_archived() {
+        let resolution_id = Uuid::new_v4();
+        let archived_event = StoredEvent {
+            event_id: Uuid::new_v4(),
+            aggregate_id: resolution_id,
+            event_type: "rules.resolution_archived".to_owned(),
+            payload: serde_json::to_value(RulesEventKind::ResolutionArchived(ResolutionArchived {
+                resolution_id,
+            }))
+            .unwrap(),
+            sequence_number: 2,
+            correlation_id: Uuid::new_v4(),
+            causation_id: Uuid::new_v4(),
+            occurred_at: fixed_now(),
+        };
+        let repo = RecordingEventRepository::with_aggregate_ids(
+            Ok(vec![intent_declared_event(resolution_id), archived_event]),
+            vec![resolution_id],
+        );
+
+        let result = list_resolutions(&repo).await.unwrap();
+
+        assert!(result.is_empty());
     }
 }

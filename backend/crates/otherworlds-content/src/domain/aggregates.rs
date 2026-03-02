@@ -9,8 +9,9 @@ use otherworlds_core::event::EventMetadata;
 use uuid::Uuid;
 
 use super::events::{
-    CAMPAIGN_COMPILED_EVENT_TYPE, CAMPAIGN_INGESTED_EVENT_TYPE, CAMPAIGN_VALIDATED_EVENT_TYPE,
-    CampaignCompiled, CampaignIngested, CampaignValidated, ContentEvent, ContentEventKind,
+    CAMPAIGN_ARCHIVED_EVENT_TYPE, CAMPAIGN_COMPILED_EVENT_TYPE, CAMPAIGN_INGESTED_EVENT_TYPE,
+    CAMPAIGN_VALIDATED_EVENT_TYPE, CampaignArchived, CampaignCompiled, CampaignIngested,
+    CampaignValidated, ContentEvent, ContentEventKind,
 };
 
 /// The aggregate root for a campaign.
@@ -24,6 +25,8 @@ pub struct Campaign {
     pub(crate) ingested: bool,
     /// Whether the campaign has been validated.
     pub(crate) validated: bool,
+    /// Whether the campaign has been archived (soft-deleted).
+    pub(crate) archived: bool,
     /// The campaign version hash (set on ingestion).
     pub(crate) version_hash: Option<String>,
     /// Uncommitted events pending persistence.
@@ -39,6 +42,7 @@ impl Campaign {
             version: 0,
             ingested: false,
             validated: false,
+            archived: false,
             version_hash: None,
             uncommitted_events: Vec::new(),
         }
@@ -197,6 +201,39 @@ impl Campaign {
         self.uncommitted_events.push(event);
         Ok(())
     }
+
+    /// Archives the campaign (soft-delete), producing a `CampaignArchived` event.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DomainError::Validation` if the campaign is already archived.
+    pub fn archive(&mut self, correlation_id: Uuid, clock: &dyn Clock) -> Result<(), DomainError> {
+        if self.archived {
+            return Err(DomainError::Validation(
+                "campaign is already archived".into(),
+            ));
+        }
+
+        // TODO: event_id uses Uuid::new_v4() which breaks replay determinism.
+        // See TODO on `ingest_campaign()` for details.
+        let event = ContentEvent {
+            metadata: EventMetadata {
+                event_id: Uuid::new_v4(),
+                event_type: CAMPAIGN_ARCHIVED_EVENT_TYPE.to_owned(),
+                aggregate_id: self.id,
+                sequence_number: self.next_sequence_number(),
+                correlation_id,
+                causation_id: correlation_id,
+                occurred_at: clock.now(),
+            },
+            kind: ContentEventKind::CampaignArchived(CampaignArchived {
+                campaign_id: self.id,
+            }),
+        };
+
+        self.uncommitted_events.push(event);
+        Ok(())
+    }
 }
 
 impl AggregateRoot for Campaign {
@@ -220,6 +257,9 @@ impl AggregateRoot for Campaign {
                 self.validated = true;
             }
             ContentEventKind::CampaignCompiled(_) => {}
+            ContentEventKind::CampaignArchived(_) => {
+                self.archived = true;
+            }
         }
         self.version += 1;
     }
@@ -469,6 +509,94 @@ mod tests {
             }
             other => panic!("expected Validation, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_archive_produces_campaign_archived_event() {
+        // Arrange
+        let campaign_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let mut campaign = Campaign::new(campaign_id);
+
+        // Act
+        campaign.archive(correlation_id, &clock).unwrap();
+
+        // Assert
+        let events = campaign.uncommitted_events();
+        assert_eq!(events.len(), 1);
+
+        let event = &events[0];
+        assert_eq!(event.event_type(), CAMPAIGN_ARCHIVED_EVENT_TYPE);
+
+        let meta = event.metadata();
+        assert_eq!(meta.aggregate_id, campaign_id);
+        assert_eq!(meta.sequence_number, 1);
+        assert_eq!(meta.correlation_id, correlation_id);
+        assert_eq!(meta.causation_id, correlation_id);
+        assert_eq!(meta.occurred_at, fixed_now);
+
+        match &event.kind {
+            ContentEventKind::CampaignArchived(payload) => {
+                assert_eq!(payload.campaign_id, campaign_id);
+            }
+            other => panic!("expected CampaignArchived, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_archive_returns_error_when_already_archived() {
+        // Arrange
+        let campaign_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let mut campaign = Campaign::new(campaign_id);
+
+        campaign.archive(Uuid::new_v4(), &clock).unwrap();
+        for event in campaign.uncommitted_events().to_vec() {
+            campaign.apply(&event);
+        }
+        campaign.clear_uncommitted_events();
+
+        // Act
+        let result = campaign.archive(Uuid::new_v4(), &clock);
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::Validation(msg) => {
+                assert!(msg.contains("already archived"));
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_apply_campaign_archived_sets_archived_flag() {
+        // Arrange
+        let campaign_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let mut campaign = Campaign::new(campaign_id);
+        let event = ContentEvent {
+            metadata: EventMetadata {
+                event_id: Uuid::new_v4(),
+                event_type: CAMPAIGN_ARCHIVED_EVENT_TYPE.to_owned(),
+                aggregate_id: campaign_id,
+                sequence_number: 1,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+            kind: ContentEventKind::CampaignArchived(CampaignArchived { campaign_id }),
+        };
+
+        // Act
+        campaign.apply(&event);
+
+        // Assert
+        assert!(campaign.archived);
+        assert_eq!(campaign.version, 1);
     }
 
     #[test]

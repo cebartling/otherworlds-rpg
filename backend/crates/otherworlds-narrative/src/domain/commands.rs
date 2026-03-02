@@ -40,3 +40,22 @@ impl Command for PresentChoice {
         self.correlation_id
     }
 }
+
+/// Command to archive (soft-delete) a narrative session.
+#[derive(Debug, Clone)]
+pub struct ArchiveSession {
+    /// The correlation ID for tracing.
+    pub correlation_id: Uuid,
+    /// The session identifier.
+    pub session_id: Uuid,
+}
+
+impl Command for ArchiveSession {
+    fn command_type(&self) -> &'static str {
+        "narrative.archive_session"
+    }
+
+    fn correlation_id(&self) -> Uuid {
+        self.correlation_id
+    }
+}

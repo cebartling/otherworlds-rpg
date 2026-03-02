@@ -33,6 +33,13 @@ pub struct ExperienceGained {
     pub amount: u32,
 }
 
+/// Emitted when a character is archived (soft-deleted).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CharacterArchived {
+    /// The character identifier.
+    pub character_id: Uuid,
+}
+
 /// Event payload variants for the Character Management context.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum CharacterEventKind {
@@ -42,6 +49,8 @@ pub enum CharacterEventKind {
     AttributeModified(AttributeModified),
     /// A character has gained experience.
     ExperienceGained(ExperienceGained),
+    /// A character has been archived (soft-deleted).
+    CharacterArchived(CharacterArchived),
 }
 
 /// Domain event envelope for the Character Management context.
@@ -59,6 +68,7 @@ impl DomainEvent for CharacterEvent {
             CharacterEventKind::CharacterCreated(_) => "character.character_created",
             CharacterEventKind::AttributeModified(_) => "character.attribute_modified",
             CharacterEventKind::ExperienceGained(_) => "character.experience_gained",
+            CharacterEventKind::CharacterArchived(_) => "character.character_archived",
         }
     }
 

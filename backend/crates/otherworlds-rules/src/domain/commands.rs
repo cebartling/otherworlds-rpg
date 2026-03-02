@@ -98,3 +98,22 @@ impl Command for ProduceEffects {
         self.correlation_id
     }
 }
+
+/// Command to archive (soft-delete) a resolution.
+#[derive(Debug, Clone)]
+pub struct ArchiveResolution {
+    /// The correlation ID for tracing.
+    pub correlation_id: Uuid,
+    /// The resolution to archive.
+    pub resolution_id: Uuid,
+}
+
+impl Command for ArchiveResolution {
+    fn command_type(&self) -> &'static str {
+        "rules.archive_resolution"
+    }
+
+    fn correlation_id(&self) -> Uuid {
+        self.correlation_id
+    }
+}

@@ -30,6 +30,7 @@ const EVENT_TYPES: &[&str] = &[
     "content.campaign_ingested",
     "content.campaign_validated",
     "content.campaign_compiled",
+    "content.campaign_archived",
 ];
 
 /// Summary view for listing campaigns.
@@ -61,6 +62,9 @@ pub async fn list_campaigns(
             continue;
         }
         let campaign = command_handlers::reconstitute(id, &stored_events)?;
+        if campaign.archived {
+            continue;
+        }
         summaries.push(CampaignSummary {
             campaign_id: id,
             ingested: campaign.ingested,
@@ -103,7 +107,10 @@ mod tests {
     use uuid::Uuid;
 
     use crate::application::query_handlers::{get_campaign_by_id, list_campaigns};
-    use crate::domain::events::{CAMPAIGN_INGESTED_EVENT_TYPE, CampaignIngested, ContentEventKind};
+    use crate::domain::events::{
+        CAMPAIGN_ARCHIVED_EVENT_TYPE, CAMPAIGN_INGESTED_EVENT_TYPE, CampaignArchived,
+        CampaignIngested, ContentEventKind,
+    };
     use otherworlds_test_support::{EmptyEventRepository, RecordingEventRepository};
 
     #[tokio::test]
@@ -193,5 +200,51 @@ mod tests {
         assert!(result[0].ingested);
         assert!(!result[0].validated);
         assert_eq!(result[0].version, 1);
+    }
+
+    #[tokio::test]
+    async fn test_list_campaigns_excludes_archived() {
+        // Arrange
+        let campaign_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+
+        let events = vec![
+            StoredEvent {
+                event_id: Uuid::new_v4(),
+                aggregate_id: campaign_id,
+                event_type: CAMPAIGN_INGESTED_EVENT_TYPE.to_owned(),
+                payload: serde_json::to_value(ContentEventKind::CampaignIngested(
+                    CampaignIngested {
+                        campaign_id,
+                        version_hash: "abc123".to_owned(),
+                    },
+                ))
+                .unwrap(),
+                sequence_number: 1,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+            StoredEvent {
+                event_id: Uuid::new_v4(),
+                aggregate_id: campaign_id,
+                event_type: CAMPAIGN_ARCHIVED_EVENT_TYPE.to_owned(),
+                payload: serde_json::to_value(ContentEventKind::CampaignArchived(
+                    CampaignArchived { campaign_id },
+                ))
+                .unwrap(),
+                sequence_number: 2,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+        ];
+        let repo = RecordingEventRepository::with_aggregate_ids(Ok(events), vec![campaign_id]);
+
+        // Act
+        let result = list_campaigns(&repo).await.unwrap();
+
+        // Assert
+        assert!(result.is_empty());
     }
 }

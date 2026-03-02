@@ -31,6 +31,13 @@ pub struct ItemEquipped {
     pub item_id: Uuid,
 }
 
+/// Emitted when an inventory is archived (soft-deleted).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InventoryArchived {
+    /// The inventory identifier.
+    pub inventory_id: Uuid,
+}
+
 /// Event type identifier for [`ItemAdded`].
 pub const ITEM_ADDED_EVENT_TYPE: &str = "inventory.item_added";
 
@@ -39,6 +46,9 @@ pub const ITEM_REMOVED_EVENT_TYPE: &str = "inventory.item_removed";
 
 /// Event type identifier for [`ItemEquipped`].
 pub const ITEM_EQUIPPED_EVENT_TYPE: &str = "inventory.item_equipped";
+
+/// Event type identifier for [`InventoryArchived`].
+pub const INVENTORY_ARCHIVED_EVENT_TYPE: &str = "inventory.inventory_archived";
 
 /// Event payload variants for the Inventory & Economy context.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,6 +59,8 @@ pub enum InventoryEventKind {
     ItemRemoved(ItemRemoved),
     /// An item has been equipped.
     ItemEquipped(ItemEquipped),
+    /// An inventory has been archived (soft-deleted).
+    InventoryArchived(InventoryArchived),
 }
 
 /// Domain event envelope for the Inventory & Economy context.
@@ -66,6 +78,7 @@ impl DomainEvent for InventoryEvent {
             InventoryEventKind::ItemAdded(_) => ITEM_ADDED_EVENT_TYPE,
             InventoryEventKind::ItemRemoved(_) => ITEM_REMOVED_EVENT_TYPE,
             InventoryEventKind::ItemEquipped(_) => ITEM_EQUIPPED_EVENT_TYPE,
+            InventoryEventKind::InventoryArchived(_) => INVENTORY_ARCHIVED_EVENT_TYPE,
         }
     }
 

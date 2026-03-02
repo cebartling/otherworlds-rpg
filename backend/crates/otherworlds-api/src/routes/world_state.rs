@@ -149,11 +149,39 @@ async fn get_world_snapshot(
     Ok(Json(view))
 }
 
+/// DELETE /{`world_id`}
+#[instrument(skip(state), fields(world_id = %id))]
+async fn archive_world_snapshot(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<CommandResponse>, ApiError> {
+    let command = commands::ArchiveWorldSnapshot {
+        correlation_id: Uuid::new_v4(),
+        world_id: id,
+    };
+
+    info!(correlation_id = %command.correlation_id, "handling archive_world_snapshot command");
+
+    let stored_events = command_handlers::handle_archive_world_snapshot(
+        &command,
+        state.clock.as_ref(),
+        &*state.event_repository,
+    )
+    .await?;
+
+    let event_ids = stored_events.iter().map(|e| e.event_id).collect();
+
+    Ok(Json(CommandResponse { event_ids }))
+}
+
 /// Returns the router for the world state context.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_world_snapshots))
-        .route("/{world_id}", get(get_world_snapshot))
+        .route(
+            "/{world_id}",
+            get(get_world_snapshot).delete(archive_world_snapshot),
+        )
         .route("/apply-effect", post(apply_effect))
         .route("/set-flag", post(set_flag))
         .route("/update-disposition", post(update_disposition))
@@ -173,7 +201,9 @@ mod tests {
     use otherworlds_test_support::{
         EmptyEventRepository, FailingEventRepository, FixedClock, MockRng, RecordingEventRepository,
     };
-    use otherworlds_world_state::domain::events::{WorldFactChanged, WorldStateEventKind};
+    use otherworlds_world_state::domain::events::{
+        WorldFactChanged, WorldSnapshotArchived, WorldStateEventKind,
+    };
     use serde_json::Value;
     use sqlx::PgPool;
     use std::sync::{Arc, Mutex};
@@ -614,5 +644,138 @@ mod tests {
             .unwrap();
         let json: Value = serde_json::from_slice(&body_bytes).unwrap();
         assert_eq!(json["error"], "infrastructure_error");
+    }
+
+    #[tokio::test]
+    async fn test_archive_world_snapshot_returns_200_with_event_ids() {
+        // Arrange
+        let world_id = Uuid::new_v4();
+        let fixed_now = chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 1, 15, 10, 0, 0).unwrap();
+        let events = vec![StoredEvent {
+            event_id: Uuid::new_v4(),
+            aggregate_id: world_id,
+            event_type: "world_state.world_fact_changed".to_owned(),
+            payload: serde_json::to_value(WorldStateEventKind::WorldFactChanged(
+                WorldFactChanged {
+                    world_id,
+                    fact_key: "quest_complete".to_owned(),
+                },
+            ))
+            .unwrap(),
+            sequence_number: 1,
+            correlation_id: Uuid::new_v4(),
+            causation_id: Uuid::new_v4(),
+            occurred_at: fixed_now,
+        }];
+        let repo = RecordingEventRepository::new(Ok(events));
+        let app = router().with_state(app_state_with(Arc::new(repo)));
+
+        let request = Request::builder()
+            .method("DELETE")
+            .uri(format!("/{world_id}"))
+            .body(Body::empty())
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        let event_ids = json["event_ids"].as_array().unwrap();
+        assert_eq!(event_ids.len(), 1);
+        for id in event_ids {
+            Uuid::parse_str(id.as_str().unwrap()).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn test_archive_world_snapshot_returns_404_when_not_found() {
+        // Arrange
+        let app = router().with_state(test_app_state());
+        let world_id = Uuid::new_v4();
+
+        let request = Request::builder()
+            .method("DELETE")
+            .uri(format!("/{world_id}"))
+            .body(Body::empty())
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        assert_eq!(json["error"], "aggregate_not_found");
+    }
+
+    #[tokio::test]
+    async fn test_archive_world_snapshot_returns_400_when_already_archived() {
+        // Arrange
+        let world_id = Uuid::new_v4();
+        let fixed_now = chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 1, 15, 10, 0, 0).unwrap();
+        let events = vec![
+            StoredEvent {
+                event_id: Uuid::new_v4(),
+                aggregate_id: world_id,
+                event_type: "world_state.world_fact_changed".to_owned(),
+                payload: serde_json::to_value(WorldStateEventKind::WorldFactChanged(
+                    WorldFactChanged {
+                        world_id,
+                        fact_key: "quest_complete".to_owned(),
+                    },
+                ))
+                .unwrap(),
+                sequence_number: 1,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+            StoredEvent {
+                event_id: Uuid::new_v4(),
+                aggregate_id: world_id,
+                event_type: "world_state.world_snapshot_archived".to_owned(),
+                payload: serde_json::to_value(WorldStateEventKind::WorldSnapshotArchived(
+                    WorldSnapshotArchived { world_id },
+                ))
+                .unwrap(),
+                sequence_number: 2,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+        ];
+        let repo = RecordingEventRepository::new(Ok(events));
+        let app = router().with_state(app_state_with(Arc::new(repo)));
+
+        let request = Request::builder()
+            .method("DELETE")
+            .uri(format!("/{world_id}"))
+            .body(Body::empty())
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        assert_eq!(json["error"], "validation_error");
     }
 }

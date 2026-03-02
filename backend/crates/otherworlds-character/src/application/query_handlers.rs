@@ -32,6 +32,7 @@ const EVENT_TYPES: &[&str] = &[
     "character.character_created",
     "character.attribute_modified",
     "character.experience_gained",
+    "character.character_archived",
 ];
 
 /// Summary view for listing characters.
@@ -63,6 +64,9 @@ pub async fn list_characters(
             continue;
         }
         let character = command_handlers::reconstitute(id, &stored_events)?;
+        if character.archived {
+            continue;
+        }
         summaries.push(CharacterSummary {
             character_id: id,
             name: character.name.clone(),
@@ -105,7 +109,7 @@ mod tests {
     use uuid::Uuid;
 
     use crate::application::query_handlers::{get_character_by_id, list_characters};
-    use crate::domain::events::{CharacterCreated, CharacterEventKind};
+    use crate::domain::events::{CharacterArchived, CharacterCreated, CharacterEventKind};
     use otherworlds_test_support::{EmptyEventRepository, RecordingEventRepository};
 
     #[tokio::test]
@@ -195,5 +199,48 @@ mod tests {
         assert_eq!(result[0].name, Some("Alaric".to_owned()));
         assert_eq!(result[0].experience, 0);
         assert_eq!(result[0].version, 1);
+    }
+
+    #[tokio::test]
+    async fn test_list_characters_excludes_archived() {
+        let character_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+
+        let events = vec![
+            StoredEvent {
+                event_id: Uuid::new_v4(),
+                aggregate_id: character_id,
+                event_type: "character.character_created".to_owned(),
+                payload: serde_json::to_value(CharacterEventKind::CharacterCreated(
+                    CharacterCreated {
+                        character_id,
+                        name: "Alaric".to_owned(),
+                    },
+                ))
+                .unwrap(),
+                sequence_number: 1,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+            StoredEvent {
+                event_id: Uuid::new_v4(),
+                aggregate_id: character_id,
+                event_type: "character.character_archived".to_owned(),
+                payload: serde_json::to_value(CharacterEventKind::CharacterArchived(
+                    CharacterArchived { character_id },
+                ))
+                .unwrap(),
+                sequence_number: 2,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+        ];
+        let repo = RecordingEventRepository::with_aggregate_ids(Ok(events), vec![character_id]);
+
+        let result = list_characters(&repo).await.unwrap();
+
+        assert!(result.is_empty());
     }
 }

@@ -152,11 +152,42 @@ async fn get_campaign_run(
     Ok(Json(view))
 }
 
+/// DELETE /{`run_id`}
+#[instrument(skip(state), fields(run_id = %id))]
+async fn archive_campaign_run(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<CommandResponse>, ApiError> {
+    let command = commands::ArchiveCampaignRun {
+        correlation_id: Uuid::new_v4(),
+        run_id: id,
+    };
+
+    info!(correlation_id = %command.correlation_id, "handling archive_campaign_run command");
+
+    let result = command_handlers::handle_archive_campaign_run(
+        &command,
+        state.clock.as_ref(),
+        &*state.event_repository,
+    )
+    .await?;
+
+    let event_ids = result.stored_events.iter().map(|e| e.event_id).collect();
+
+    Ok(Json(CommandResponse {
+        aggregate_id: result.aggregate_id,
+        event_ids,
+    }))
+}
+
 /// Returns the router for the session context.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_campaign_runs))
-        .route("/{run_id}", get(get_campaign_run))
+        .route(
+            "/{run_id}",
+            get(get_campaign_run).delete(archive_campaign_run),
+        )
         .route("/start-campaign-run", post(start_campaign_run))
         .route("/create-checkpoint", post(create_checkpoint))
         .route("/branch-timeline", post(branch_timeline))
@@ -598,6 +629,91 @@ mod tests {
             .await
             .unwrap();
         let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(json["error"], "infrastructure_error");
+    }
+
+    #[tokio::test]
+    async fn test_archive_campaign_run_returns_200_with_event_ids() {
+        // Arrange
+        let app = router().with_state(test_app_state());
+        let run_id = Uuid::new_v4();
+
+        let request = Request::builder()
+            .method("DELETE")
+            .uri(format!("/{run_id}"))
+            .body(Body::empty())
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        let returned_id = Uuid::parse_str(json["aggregate_id"].as_str().unwrap()).unwrap();
+        assert_eq!(returned_id, run_id);
+
+        let event_ids = json["event_ids"].as_array().unwrap();
+        assert_eq!(event_ids.len(), 1);
+        for id in event_ids {
+            Uuid::parse_str(id.as_str().unwrap()).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn test_archive_campaign_run_returns_404_when_not_found() {
+        // Arrange
+        let app = router().with_state(empty_app_state());
+        let run_id = Uuid::new_v4();
+
+        let request = Request::builder()
+            .method("DELETE")
+            .uri(format!("/{run_id}"))
+            .body(Body::empty())
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        assert_eq!(json["error"], "aggregate_not_found");
+    }
+
+    #[tokio::test]
+    async fn test_archive_campaign_run_returns_500_when_repository_fails() {
+        // Arrange
+        let app = router().with_state(failing_app_state());
+        let run_id = Uuid::new_v4();
+
+        let request = Request::builder()
+            .method("DELETE")
+            .uri(format!("/{run_id}"))
+            .body(Body::empty())
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+
         assert_eq!(json["error"], "infrastructure_error");
     }
 }

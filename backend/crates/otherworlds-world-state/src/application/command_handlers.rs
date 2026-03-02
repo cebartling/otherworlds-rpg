@@ -11,7 +11,7 @@ use otherworlds_core::repository::{EventRepository, StoredEvent};
 use uuid::Uuid;
 
 use crate::domain::aggregates::WorldSnapshot;
-use crate::domain::commands::{ApplyEffect, SetFlag, UpdateDisposition};
+use crate::domain::commands::{ApplyEffect, ArchiveWorldSnapshot, SetFlag, UpdateDisposition};
 use crate::domain::events::{WorldStateEvent, WorldStateEventKind};
 
 fn to_stored_event(event: &WorldStateEvent) -> StoredEvent {
@@ -78,6 +78,10 @@ pub async fn handle_apply_effect(
     let existing_events = repo.load_events(command.world_id).await?;
     let mut snapshot = reconstitute(command.world_id, &existing_events)?;
 
+    if snapshot.archived {
+        return Err(DomainError::Validation("world snapshot is archived".into()));
+    }
+
     snapshot.apply_effect(command.fact_key.clone(), command.correlation_id, clock);
 
     let stored_events: Vec<StoredEvent> = snapshot
@@ -109,6 +113,10 @@ pub async fn handle_set_flag(
 
     let existing_events = repo.load_events(command.world_id).await?;
     let mut snapshot = reconstitute(command.world_id, &existing_events)?;
+
+    if snapshot.archived {
+        return Err(DomainError::Validation("world snapshot is archived".into()));
+    }
 
     snapshot.set_flag(
         command.flag_key.clone(),
@@ -143,7 +151,43 @@ pub async fn handle_update_disposition(
     let existing_events = repo.load_events(command.world_id).await?;
     let mut snapshot = reconstitute(command.world_id, &existing_events)?;
 
+    if snapshot.archived {
+        return Err(DomainError::Validation("world snapshot is archived".into()));
+    }
+
     snapshot.update_disposition(command.entity_id, command.correlation_id, clock);
+
+    let stored_events: Vec<StoredEvent> = snapshot
+        .uncommitted_events()
+        .iter()
+        .map(to_stored_event)
+        .collect();
+
+    repo.append_events(command.world_id, snapshot.version, &stored_events)
+        .await?;
+
+    Ok(stored_events)
+}
+
+/// Handles the `ArchiveWorldSnapshot` command: reconstitutes the aggregate,
+/// archives it (soft-delete), and persists the resulting events.
+///
+/// # Errors
+///
+/// Returns `DomainError::AggregateNotFound` if the world snapshot does not exist.
+/// Returns `DomainError::Validation` if the world snapshot is already archived.
+pub async fn handle_archive_world_snapshot(
+    command: &ArchiveWorldSnapshot,
+    clock: &dyn Clock,
+    repo: &dyn EventRepository,
+) -> Result<Vec<StoredEvent>, DomainError> {
+    let existing_events = repo.load_events(command.world_id).await?;
+    if existing_events.is_empty() {
+        return Err(DomainError::AggregateNotFound(command.world_id));
+    }
+    let mut snapshot = reconstitute(command.world_id, &existing_events)?;
+
+    snapshot.archive(command.correlation_id, clock)?;
 
     let stored_events: Vec<StoredEvent> = snapshot
         .uncommitted_events()
@@ -164,11 +208,14 @@ mod tests {
     use otherworlds_test_support::{FixedClock, RecordingEventRepository};
     use uuid::Uuid;
 
+    use otherworlds_core::repository::StoredEvent;
+
     use crate::application::command_handlers::{
-        handle_apply_effect, handle_set_flag, handle_update_disposition,
+        handle_apply_effect, handle_archive_world_snapshot, handle_set_flag,
+        handle_update_disposition,
     };
-    use crate::domain::commands::{ApplyEffect, SetFlag, UpdateDisposition};
-    use crate::domain::events::WorldStateEventKind;
+    use crate::domain::commands::{ApplyEffect, ArchiveWorldSnapshot, SetFlag, UpdateDisposition};
+    use crate::domain::events::{WorldFactChanged, WorldSnapshotArchived, WorldStateEventKind};
 
     #[tokio::test]
     async fn test_handle_apply_effect_persists_world_fact_changed_event() {
@@ -360,6 +407,221 @@ mod tests {
         match result.unwrap_err() {
             DomainError::Validation(msg) => {
                 assert_eq!(msg, "flag key must not be empty");
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    /// Helper: creates stored events for a world snapshot that has been archived.
+    fn archived_world_snapshot_events(world_id: Uuid) -> Vec<StoredEvent> {
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        vec![
+            StoredEvent {
+                event_id: Uuid::new_v4(),
+                aggregate_id: world_id,
+                event_type: "world_state.world_fact_changed".to_owned(),
+                payload: serde_json::to_value(WorldStateEventKind::WorldFactChanged(
+                    WorldFactChanged {
+                        world_id,
+                        fact_key: "quest_complete".to_owned(),
+                    },
+                ))
+                .unwrap(),
+                sequence_number: 1,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+            StoredEvent {
+                event_id: Uuid::new_v4(),
+                aggregate_id: world_id,
+                event_type: "world_state.world_snapshot_archived".to_owned(),
+                payload: serde_json::to_value(WorldStateEventKind::WorldSnapshotArchived(
+                    WorldSnapshotArchived { world_id },
+                ))
+                .unwrap(),
+                sequence_number: 2,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+        ]
+    }
+
+    #[tokio::test]
+    async fn test_handle_archive_world_snapshot_persists_archived_event() {
+        // Arrange
+        let world_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+
+        // Provide a pre-existing event so the aggregate exists
+        let existing = vec![StoredEvent {
+            event_id: Uuid::new_v4(),
+            aggregate_id: world_id,
+            event_type: "world_state.world_fact_changed".to_owned(),
+            payload: serde_json::to_value(WorldStateEventKind::WorldFactChanged(
+                WorldFactChanged {
+                    world_id,
+                    fact_key: "quest_complete".to_owned(),
+                },
+            ))
+            .unwrap(),
+            sequence_number: 1,
+            correlation_id: Uuid::new_v4(),
+            causation_id: Uuid::new_v4(),
+            occurred_at: fixed_now,
+        }];
+        let repo = RecordingEventRepository::new(Ok(existing));
+
+        let command = ArchiveWorldSnapshot {
+            correlation_id,
+            world_id,
+        };
+
+        // Act
+        let result = handle_archive_world_snapshot(&command, &clock, &repo).await;
+
+        // Assert
+        assert!(result.is_ok());
+
+        let appended = repo.appended_events();
+        assert_eq!(appended.len(), 1);
+
+        let (agg_id, expected_version, events) = &appended[0];
+        assert_eq!(*agg_id, world_id);
+        assert_eq!(*expected_version, 1);
+        assert_eq!(events.len(), 1);
+
+        let stored = &events[0];
+        assert_eq!(stored.event_type, "world_state.world_snapshot_archived");
+        assert_eq!(stored.aggregate_id, world_id);
+        assert_eq!(stored.sequence_number, 2);
+        assert_eq!(stored.correlation_id, correlation_id);
+    }
+
+    #[tokio::test]
+    async fn test_handle_archive_world_snapshot_returns_not_found_when_no_events() {
+        // Arrange
+        let clock = FixedClock(Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap());
+        let repo = RecordingEventRepository::new(Ok(Vec::new()));
+
+        let command = ArchiveWorldSnapshot {
+            correlation_id: Uuid::new_v4(),
+            world_id: Uuid::new_v4(),
+        };
+
+        // Act
+        let result = handle_archive_world_snapshot(&command, &clock, &repo).await;
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::AggregateNotFound(id) => assert_eq!(id, command.world_id),
+            other => panic!("expected AggregateNotFound, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_archive_world_snapshot_rejects_already_archived() {
+        // Arrange
+        let world_id = Uuid::new_v4();
+        let clock = FixedClock(Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap());
+        let repo = RecordingEventRepository::new(Ok(archived_world_snapshot_events(world_id)));
+
+        let command = ArchiveWorldSnapshot {
+            correlation_id: Uuid::new_v4(),
+            world_id,
+        };
+
+        // Act
+        let result = handle_archive_world_snapshot(&command, &clock, &repo).await;
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::Validation(msg) => {
+                assert_eq!(msg, "world snapshot is already archived");
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_apply_effect_rejects_archived_snapshot() {
+        // Arrange
+        let world_id = Uuid::new_v4();
+        let clock = FixedClock(Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap());
+        let repo = RecordingEventRepository::new(Ok(archived_world_snapshot_events(world_id)));
+
+        let command = ApplyEffect {
+            correlation_id: Uuid::new_v4(),
+            world_id,
+            fact_key: "quest_complete".to_owned(),
+        };
+
+        // Act
+        let result = handle_apply_effect(&command, &clock, &repo).await;
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::Validation(msg) => {
+                assert_eq!(msg, "world snapshot is archived");
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_set_flag_rejects_archived_snapshot() {
+        // Arrange
+        let world_id = Uuid::new_v4();
+        let clock = FixedClock(Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap());
+        let repo = RecordingEventRepository::new(Ok(archived_world_snapshot_events(world_id)));
+
+        let command = SetFlag {
+            correlation_id: Uuid::new_v4(),
+            world_id,
+            flag_key: "door_unlocked".to_owned(),
+            value: true,
+        };
+
+        // Act
+        let result = handle_set_flag(&command, &clock, &repo).await;
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::Validation(msg) => {
+                assert_eq!(msg, "world snapshot is archived");
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_update_disposition_rejects_archived_snapshot() {
+        // Arrange
+        let world_id = Uuid::new_v4();
+        let clock = FixedClock(Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap());
+        let repo = RecordingEventRepository::new(Ok(archived_world_snapshot_events(world_id)));
+
+        let command = UpdateDisposition {
+            correlation_id: Uuid::new_v4(),
+            world_id,
+            entity_id: Uuid::new_v4(),
+        };
+
+        // Act
+        let result = handle_update_disposition(&command, &clock, &repo).await;
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::Validation(msg) => {
+                assert_eq!(msg, "world snapshot is archived");
             }
             other => panic!("expected Validation, got {other:?}"),
         }

@@ -29,6 +29,13 @@ pub struct CampaignCompiled {
     pub version_hash: String,
 }
 
+/// Emitted when a campaign is archived (soft-deleted).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CampaignArchived {
+    /// The campaign identifier.
+    pub campaign_id: Uuid,
+}
+
 /// Event type identifier for [`CampaignIngested`].
 pub const CAMPAIGN_INGESTED_EVENT_TYPE: &str = "content.campaign_ingested";
 
@@ -37,6 +44,9 @@ pub const CAMPAIGN_VALIDATED_EVENT_TYPE: &str = "content.campaign_validated";
 
 /// Event type identifier for [`CampaignCompiled`].
 pub const CAMPAIGN_COMPILED_EVENT_TYPE: &str = "content.campaign_compiled";
+
+/// Event type identifier for [`CampaignArchived`].
+pub const CAMPAIGN_ARCHIVED_EVENT_TYPE: &str = "content.campaign_archived";
 
 /// Event payload variants for the Content Authoring context.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,6 +57,8 @@ pub enum ContentEventKind {
     CampaignValidated(CampaignValidated),
     /// A campaign has been compiled into runtime format.
     CampaignCompiled(CampaignCompiled),
+    /// A campaign has been archived (soft-deleted).
+    CampaignArchived(CampaignArchived),
 }
 
 /// Domain event envelope for the Content Authoring context.
@@ -64,6 +76,7 @@ impl DomainEvent for ContentEvent {
             ContentEventKind::CampaignIngested(_) => CAMPAIGN_INGESTED_EVENT_TYPE,
             ContentEventKind::CampaignValidated(_) => CAMPAIGN_VALIDATED_EVENT_TYPE,
             ContentEventKind::CampaignCompiled(_) => CAMPAIGN_COMPILED_EVENT_TYPE,
+            ContentEventKind::CampaignArchived(_) => CAMPAIGN_ARCHIVED_EVENT_TYPE,
         }
     }
 

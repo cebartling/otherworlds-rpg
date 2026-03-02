@@ -11,7 +11,7 @@ use otherworlds_core::repository::{EventRepository, StoredEvent};
 use uuid::Uuid;
 
 use crate::domain::aggregates::Campaign;
-use crate::domain::commands::{CompileCampaign, IngestCampaign, ValidateCampaign};
+use crate::domain::commands::{ArchiveCampaign, CompileCampaign, IngestCampaign, ValidateCampaign};
 use crate::domain::events::{ContentEvent, ContentEventKind};
 
 /// Result of a successfully handled command.
@@ -118,6 +118,9 @@ pub async fn handle_validate_campaign(
         return Err(DomainError::AggregateNotFound(command.campaign_id));
     }
     let mut campaign = reconstitute(command.campaign_id, &existing_events)?;
+    if campaign.archived {
+        return Err(DomainError::Validation("campaign is archived".into()));
+    }
 
     campaign.validate_campaign(command.correlation_id, clock)?;
 
@@ -152,8 +155,46 @@ pub async fn handle_compile_campaign(
         return Err(DomainError::AggregateNotFound(command.campaign_id));
     }
     let mut campaign = reconstitute(command.campaign_id, &existing_events)?;
+    if campaign.archived {
+        return Err(DomainError::Validation("campaign is archived".into()));
+    }
 
     campaign.compile_campaign(command.correlation_id, clock)?;
+
+    let stored_events: Vec<StoredEvent> = campaign
+        .uncommitted_events()
+        .iter()
+        .map(to_stored_event)
+        .collect();
+
+    repo.append_events(command.campaign_id, campaign.version(), &stored_events)
+        .await?;
+
+    Ok(ContentCommandResult {
+        aggregate_id: command.campaign_id,
+        stored_events,
+    })
+}
+
+/// Handles the `ArchiveCampaign` command: loads the aggregate, archives it,
+/// and persists the resulting events.
+///
+/// # Errors
+///
+/// Returns `DomainError::AggregateNotFound` if no events exist for the campaign.
+/// Returns `DomainError::Validation` if the campaign is already archived.
+pub async fn handle_archive_campaign(
+    command: &ArchiveCampaign,
+    clock: &dyn Clock,
+    repo: &dyn EventRepository,
+) -> Result<ContentCommandResult, DomainError> {
+    let existing_events = repo.load_events(command.campaign_id).await?;
+    if existing_events.is_empty() {
+        return Err(DomainError::AggregateNotFound(command.campaign_id));
+    }
+    let mut campaign = reconstitute(command.campaign_id, &existing_events)?;
+
+    campaign.archive(command.correlation_id, clock)?;
 
     let stored_events: Vec<StoredEvent> = campaign
         .uncommitted_events()
@@ -178,12 +219,16 @@ mod tests {
     use uuid::Uuid;
 
     use crate::application::command_handlers::{
-        handle_compile_campaign, handle_ingest_campaign, handle_validate_campaign,
+        handle_archive_campaign, handle_compile_campaign, handle_ingest_campaign,
+        handle_validate_campaign,
     };
-    use crate::domain::commands::{CompileCampaign, IngestCampaign, ValidateCampaign};
+    use crate::domain::commands::{
+        ArchiveCampaign, CompileCampaign, IngestCampaign, ValidateCampaign,
+    };
     use crate::domain::events::{
-        CAMPAIGN_COMPILED_EVENT_TYPE, CAMPAIGN_INGESTED_EVENT_TYPE, CAMPAIGN_VALIDATED_EVENT_TYPE,
-        CampaignIngested, CampaignValidated, ContentEventKind,
+        CAMPAIGN_ARCHIVED_EVENT_TYPE, CAMPAIGN_COMPILED_EVENT_TYPE, CAMPAIGN_INGESTED_EVENT_TYPE,
+        CAMPAIGN_VALIDATED_EVENT_TYPE, CampaignArchived, CampaignIngested, CampaignValidated,
+        ContentEventKind,
     };
     use otherworlds_test_support::{FixedClock, RecordingEventRepository};
 
@@ -198,6 +243,22 @@ mod tests {
             }))
             .unwrap(),
             sequence_number: 1,
+            correlation_id: Uuid::new_v4(),
+            causation_id: Uuid::new_v4(),
+            occurred_at: fixed_now,
+        }
+    }
+
+    fn dummy_archived_event(aggregate_id: Uuid, fixed_now: DateTime<Utc>) -> StoredEvent {
+        StoredEvent {
+            event_id: Uuid::new_v4(),
+            aggregate_id,
+            event_type: CAMPAIGN_ARCHIVED_EVENT_TYPE.to_owned(),
+            payload: serde_json::to_value(ContentEventKind::CampaignArchived(CampaignArchived {
+                campaign_id: aggregate_id,
+            }))
+            .unwrap(),
+            sequence_number: 3,
             correlation_id: Uuid::new_v4(),
             causation_id: Uuid::new_v4(),
             occurred_at: fixed_now,
@@ -411,6 +472,159 @@ mod tests {
         match result.unwrap_err() {
             DomainError::Validation(msg) => {
                 assert!(msg.contains(&campaign_id.to_string()));
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_archive_campaign_persists_archived_event() {
+        // Arrange
+        let campaign_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let ingested = dummy_ingested_event(campaign_id, fixed_now);
+        let repo = RecordingEventRepository::new(Ok(vec![ingested]));
+
+        let command = ArchiveCampaign {
+            correlation_id,
+            campaign_id,
+        };
+
+        // Act
+        let result = handle_archive_campaign(&command, &clock, &repo).await;
+
+        // Assert
+        let cmd_result = result.unwrap();
+        assert_eq!(cmd_result.aggregate_id, campaign_id);
+        assert_eq!(cmd_result.stored_events.len(), 1);
+
+        let appended = repo.appended_events();
+        assert_eq!(appended.len(), 1);
+
+        let (agg_id, expected_version, events) = &appended[0];
+        assert_eq!(*agg_id, campaign_id);
+        assert_eq!(*expected_version, 1);
+        assert_eq!(events.len(), 1);
+
+        let stored = &events[0];
+        assert_eq!(stored.event_type, CAMPAIGN_ARCHIVED_EVENT_TYPE);
+        assert_eq!(stored.aggregate_id, campaign_id);
+        assert_eq!(stored.sequence_number, 2);
+        assert_eq!(stored.correlation_id, correlation_id);
+        assert_eq!(stored.causation_id, correlation_id);
+        assert_eq!(stored.occurred_at, fixed_now);
+    }
+
+    #[tokio::test]
+    async fn test_handle_archive_campaign_returns_error_when_not_found() {
+        // Arrange
+        let campaign_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let repo = RecordingEventRepository::new(Ok(Vec::new()));
+
+        let command = ArchiveCampaign {
+            correlation_id,
+            campaign_id,
+        };
+
+        // Act
+        let result = handle_archive_campaign(&command, &clock, &repo).await;
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::AggregateNotFound(id) => assert_eq!(id, campaign_id),
+            other => panic!("expected AggregateNotFound, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_archive_campaign_returns_error_when_already_archived() {
+        // Arrange — campaign is ingested then archived.
+        let campaign_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let ingested = dummy_ingested_event(campaign_id, fixed_now);
+        let archived = dummy_archived_event(campaign_id, fixed_now);
+        let repo = RecordingEventRepository::new(Ok(vec![ingested, archived]));
+
+        let command = ArchiveCampaign {
+            correlation_id,
+            campaign_id,
+        };
+
+        // Act
+        let result = handle_archive_campaign(&command, &clock, &repo).await;
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::Validation(msg) => {
+                assert!(msg.contains("already archived"));
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_validate_campaign_returns_error_when_archived() {
+        // Arrange — campaign is ingested then archived.
+        let campaign_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let ingested = dummy_ingested_event(campaign_id, fixed_now);
+        let archived = dummy_archived_event(campaign_id, fixed_now);
+        let repo = RecordingEventRepository::new(Ok(vec![ingested, archived]));
+
+        let command = ValidateCampaign {
+            correlation_id,
+            campaign_id,
+        };
+
+        // Act
+        let result = handle_validate_campaign(&command, &clock, &repo).await;
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::Validation(msg) => {
+                assert!(msg.contains("archived"));
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_compile_campaign_returns_error_when_archived() {
+        // Arrange — campaign is ingested, validated, then archived.
+        let campaign_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let ingested = dummy_ingested_event(campaign_id, fixed_now);
+        let validated = dummy_validated_event(campaign_id, fixed_now);
+        let archived = dummy_archived_event(campaign_id, fixed_now);
+        let repo = RecordingEventRepository::new(Ok(vec![ingested, validated, archived]));
+
+        let command = CompileCampaign {
+            correlation_id,
+            campaign_id,
+        };
+
+        // Act
+        let result = handle_compile_campaign(&command, &clock, &repo).await;
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::Validation(msg) => {
+                assert!(msg.contains("archived"));
             }
             other => panic!("expected Validation, got {other:?}"),
         }

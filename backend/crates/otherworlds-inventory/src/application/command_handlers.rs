@@ -11,7 +11,7 @@ use otherworlds_core::repository::{EventRepository, StoredEvent};
 use uuid::Uuid;
 
 use crate::domain::aggregates::Inventory;
-use crate::domain::commands::{AddItem, EquipItem, RemoveItem};
+use crate::domain::commands::{AddItem, ArchiveInventory, EquipItem, RemoveItem};
 use crate::domain::events::{InventoryEvent, InventoryEventKind};
 
 /// Result of a successfully handled command.
@@ -86,6 +86,10 @@ pub async fn handle_add_item(
     }
     let mut inventory = reconstitute(command.inventory_id, &existing_events)?;
 
+    if inventory.archived {
+        return Err(DomainError::Validation("inventory is archived".into()));
+    }
+
     inventory.add_item(command.item_id, command.correlation_id, clock)?;
 
     let stored_events: Vec<StoredEvent> = inventory
@@ -119,6 +123,10 @@ pub async fn handle_remove_item(
         return Err(DomainError::AggregateNotFound(command.inventory_id));
     }
     let mut inventory = reconstitute(command.inventory_id, &existing_events)?;
+
+    if inventory.archived {
+        return Err(DomainError::Validation("inventory is archived".into()));
+    }
 
     inventory.remove_item(command.item_id, command.correlation_id, clock)?;
 
@@ -154,7 +162,45 @@ pub async fn handle_equip_item(
     }
     let mut inventory = reconstitute(command.inventory_id, &existing_events)?;
 
+    if inventory.archived {
+        return Err(DomainError::Validation("inventory is archived".into()));
+    }
+
     inventory.equip_item(command.item_id, command.correlation_id, clock)?;
+
+    let stored_events: Vec<StoredEvent> = inventory
+        .uncommitted_events()
+        .iter()
+        .map(to_stored_event)
+        .collect();
+
+    repo.append_events(command.inventory_id, inventory.version(), &stored_events)
+        .await?;
+
+    Ok(InventoryCommandResult {
+        aggregate_id: command.inventory_id,
+        stored_events,
+    })
+}
+
+/// Handles the `ArchiveInventory` command: loads the aggregate, archives it,
+/// and persists the resulting events.
+///
+/// # Errors
+///
+/// Returns `DomainError` if event loading or appending fails.
+pub async fn handle_archive_inventory(
+    command: &ArchiveInventory,
+    clock: &dyn Clock,
+    repo: &dyn EventRepository,
+) -> Result<InventoryCommandResult, DomainError> {
+    let existing_events = repo.load_events(command.inventory_id).await?;
+    if existing_events.is_empty() {
+        return Err(DomainError::AggregateNotFound(command.inventory_id));
+    }
+    let mut inventory = reconstitute(command.inventory_id, &existing_events)?;
+
+    inventory.archive(command.correlation_id, clock)?;
 
     let stored_events: Vec<StoredEvent> = inventory
         .uncommitted_events()
@@ -179,12 +225,12 @@ mod tests {
     use uuid::Uuid;
 
     use crate::application::command_handlers::{
-        handle_add_item, handle_equip_item, handle_remove_item,
+        handle_add_item, handle_archive_inventory, handle_equip_item, handle_remove_item,
     };
-    use crate::domain::commands::{AddItem, EquipItem, RemoveItem};
+    use crate::domain::commands::{AddItem, ArchiveInventory, EquipItem, RemoveItem};
     use crate::domain::events::{
-        ITEM_ADDED_EVENT_TYPE, ITEM_EQUIPPED_EVENT_TYPE, ITEM_REMOVED_EVENT_TYPE,
-        InventoryEventKind, ItemAdded,
+        INVENTORY_ARCHIVED_EVENT_TYPE, ITEM_ADDED_EVENT_TYPE, ITEM_EQUIPPED_EVENT_TYPE,
+        ITEM_REMOVED_EVENT_TYPE, InventoryArchived, InventoryEventKind, ItemAdded,
     };
     use otherworlds_test_support::{FixedClock, RecordingEventRepository};
 
@@ -504,6 +550,253 @@ mod tests {
         match result.unwrap_err() {
             DomainError::Validation(msg) => {
                 assert!(msg.contains(&missing_item_id.to_string()));
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_equip_item_returns_error_when_inventory_not_found() {
+        // Arrange
+        let inventory_id = Uuid::new_v4();
+        let item_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let repo = RecordingEventRepository::new(Ok(Vec::new()));
+
+        let command = EquipItem {
+            correlation_id,
+            inventory_id,
+            item_id,
+        };
+
+        // Act
+        let result = handle_equip_item(&command, &clock, &repo).await;
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::AggregateNotFound(id) => assert_eq!(id, inventory_id),
+            other => panic!("expected AggregateNotFound, got {other:?}"),
+        }
+    }
+
+    fn dummy_archived_event(
+        aggregate_id: Uuid,
+        fixed_now: DateTime<Utc>,
+        sequence_number: i64,
+    ) -> StoredEvent {
+        StoredEvent {
+            event_id: Uuid::new_v4(),
+            aggregate_id,
+            event_type: INVENTORY_ARCHIVED_EVENT_TYPE.to_owned(),
+            payload: serde_json::to_value(InventoryEventKind::InventoryArchived(
+                InventoryArchived {
+                    inventory_id: aggregate_id,
+                },
+            ))
+            .unwrap(),
+            sequence_number,
+            correlation_id: Uuid::new_v4(),
+            causation_id: Uuid::new_v4(),
+            occurred_at: fixed_now,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_archive_inventory_persists_inventory_archived_event() {
+        // Arrange
+        let inventory_id = Uuid::new_v4();
+        let item_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let existing_event = dummy_stored_event(inventory_id, item_id, fixed_now);
+        let repo = RecordingEventRepository::new(Ok(vec![existing_event]));
+
+        let command = ArchiveInventory {
+            correlation_id,
+            inventory_id,
+        };
+
+        // Act
+        let result = handle_archive_inventory(&command, &clock, &repo).await;
+
+        // Assert
+        let cmd_result = result.unwrap();
+        assert_eq!(cmd_result.aggregate_id, inventory_id);
+        assert_eq!(cmd_result.stored_events.len(), 1);
+
+        let appended = repo.appended_events();
+        assert_eq!(appended.len(), 1);
+
+        let (agg_id, expected_version, events) = &appended[0];
+        assert_eq!(*agg_id, inventory_id);
+        assert_eq!(*expected_version, 1);
+        assert_eq!(events.len(), 1);
+
+        let stored = &events[0];
+        assert_eq!(stored.event_type, INVENTORY_ARCHIVED_EVENT_TYPE);
+        assert_eq!(stored.aggregate_id, inventory_id);
+        assert_eq!(stored.sequence_number, 2);
+        assert_eq!(stored.correlation_id, correlation_id);
+        assert_eq!(stored.causation_id, correlation_id);
+        assert_eq!(stored.occurred_at, fixed_now);
+
+        let payload: InventoryEventKind = serde_json::from_value(stored.payload.clone()).unwrap();
+        match payload {
+            InventoryEventKind::InventoryArchived(archived) => {
+                assert_eq!(archived.inventory_id, inventory_id);
+            }
+            other => panic!("expected InventoryArchived payload, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_archive_inventory_returns_error_when_inventory_not_found() {
+        // Arrange
+        let inventory_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let repo = RecordingEventRepository::new(Ok(Vec::new()));
+
+        let command = ArchiveInventory {
+            correlation_id,
+            inventory_id,
+        };
+
+        // Act
+        let result = handle_archive_inventory(&command, &clock, &repo).await;
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::AggregateNotFound(id) => assert_eq!(id, inventory_id),
+            other => panic!("expected AggregateNotFound, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_archive_inventory_returns_error_when_already_archived() {
+        // Arrange — inventory has an item and is already archived.
+        let inventory_id = Uuid::new_v4();
+        let item_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let item_event = dummy_stored_event(inventory_id, item_id, fixed_now);
+        let archived_event = dummy_archived_event(inventory_id, fixed_now, 2);
+        let repo = RecordingEventRepository::new(Ok(vec![item_event, archived_event]));
+
+        let command = ArchiveInventory {
+            correlation_id,
+            inventory_id,
+        };
+
+        // Act
+        let result = handle_archive_inventory(&command, &clock, &repo).await;
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::Validation(msg) => {
+                assert_eq!(msg, "inventory is already archived");
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_add_item_returns_error_when_inventory_archived() {
+        // Arrange — inventory exists and is archived.
+        let inventory_id = Uuid::new_v4();
+        let item_id = Uuid::new_v4();
+        let new_item_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let item_event = dummy_stored_event(inventory_id, item_id, fixed_now);
+        let archived_event = dummy_archived_event(inventory_id, fixed_now, 2);
+        let repo = RecordingEventRepository::new(Ok(vec![item_event, archived_event]));
+
+        let command = AddItem {
+            correlation_id,
+            inventory_id,
+            item_id: new_item_id,
+        };
+
+        // Act
+        let result = handle_add_item(&command, &clock, &repo).await;
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::Validation(msg) => {
+                assert_eq!(msg, "inventory is archived");
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_remove_item_returns_error_when_inventory_archived() {
+        // Arrange — inventory exists, has an item, and is archived.
+        let inventory_id = Uuid::new_v4();
+        let item_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let item_event = dummy_stored_event(inventory_id, item_id, fixed_now);
+        let archived_event = dummy_archived_event(inventory_id, fixed_now, 2);
+        let repo = RecordingEventRepository::new(Ok(vec![item_event, archived_event]));
+
+        let command = RemoveItem {
+            correlation_id,
+            inventory_id,
+            item_id,
+        };
+
+        // Act
+        let result = handle_remove_item(&command, &clock, &repo).await;
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::Validation(msg) => {
+                assert_eq!(msg, "inventory is archived");
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_equip_item_returns_error_when_inventory_archived() {
+        // Arrange — inventory exists, has an item, and is archived.
+        let inventory_id = Uuid::new_v4();
+        let item_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let item_event = dummy_stored_event(inventory_id, item_id, fixed_now);
+        let archived_event = dummy_archived_event(inventory_id, fixed_now, 2);
+        let repo = RecordingEventRepository::new(Ok(vec![item_event, archived_event]));
+
+        let command = EquipItem {
+            correlation_id,
+            inventory_id,
+            item_id,
+        };
+
+        // Act
+        let result = handle_equip_item(&command, &clock, &repo).await;
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::Validation(msg) => {
+                assert_eq!(msg, "inventory is archived");
             }
             other => panic!("expected Validation, got {other:?}"),
         }

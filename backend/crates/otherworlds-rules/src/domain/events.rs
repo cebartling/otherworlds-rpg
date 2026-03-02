@@ -118,6 +118,13 @@ pub struct EffectsProduced {
     pub effects: Vec<ResolvedEffect>,
 }
 
+/// Emitted when a resolution is archived (soft-deleted).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolutionArchived {
+    /// The resolution identifier.
+    pub resolution_id: Uuid,
+}
+
 /// Event payload variants for the Rules & Resolution context.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RulesEventKind {
@@ -127,6 +134,8 @@ pub enum RulesEventKind {
     CheckResolved(CheckResolved),
     /// Effects have been produced from a resolution.
     EffectsProduced(EffectsProduced),
+    /// A resolution has been archived (soft-deleted).
+    ResolutionArchived(ResolutionArchived),
 }
 
 /// Domain event envelope for the Rules & Resolution context.
@@ -144,6 +153,7 @@ impl DomainEvent for RulesEvent {
             RulesEventKind::IntentDeclared(_) => "rules.intent_declared",
             RulesEventKind::CheckResolved(_) => "rules.check_resolved",
             RulesEventKind::EffectsProduced(_) => "rules.effects_produced",
+            RulesEventKind::ResolutionArchived(_) => "rules.resolution_archived",
         }
     }
 

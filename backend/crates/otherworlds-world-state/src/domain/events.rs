@@ -33,6 +33,13 @@ pub struct DispositionUpdated {
     pub entity_id: Uuid,
 }
 
+/// Emitted when a world snapshot is archived (soft-deleted).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorldSnapshotArchived {
+    /// The world snapshot identifier.
+    pub world_id: Uuid,
+}
+
 /// Event payload variants for the World State context.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum WorldStateEventKind {
@@ -42,6 +49,8 @@ pub enum WorldStateEventKind {
     FlagSet(FlagSet),
     /// A disposition has been updated.
     DispositionUpdated(DispositionUpdated),
+    /// A world snapshot has been archived.
+    WorldSnapshotArchived(WorldSnapshotArchived),
 }
 
 /// Domain event envelope for the World State context.
@@ -59,6 +68,7 @@ impl DomainEvent for WorldStateEvent {
             WorldStateEventKind::WorldFactChanged(_) => "world_state.world_fact_changed",
             WorldStateEventKind::FlagSet(_) => "world_state.flag_set",
             WorldStateEventKind::DispositionUpdated(_) => "world_state.disposition_updated",
+            WorldStateEventKind::WorldSnapshotArchived(_) => "world_state.world_snapshot_archived",
         }
     }
 

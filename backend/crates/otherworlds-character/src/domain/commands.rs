@@ -47,6 +47,25 @@ impl Command for ModifyAttribute {
     }
 }
 
+/// Command to archive (soft-delete) a character.
+#[derive(Debug, Clone)]
+pub struct ArchiveCharacter {
+    /// The correlation ID for tracing.
+    pub correlation_id: Uuid,
+    /// The character identifier.
+    pub character_id: Uuid,
+}
+
+impl Command for ArchiveCharacter {
+    fn command_type(&self) -> &'static str {
+        "character.archive_character"
+    }
+
+    fn correlation_id(&self) -> Uuid {
+        self.correlation_id
+    }
+}
+
 /// Command to award experience to a character.
 #[derive(Debug, Clone)]
 pub struct AwardExperience {

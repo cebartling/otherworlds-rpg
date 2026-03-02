@@ -195,11 +195,39 @@ async fn get_resolution(
     Ok(Json(view))
 }
 
+/// DELETE /{`resolution_id`}
+#[instrument(skip(state), fields(resolution_id = %id))]
+async fn archive_resolution(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<CommandResponse>, ApiError> {
+    let command = commands::ArchiveResolution {
+        correlation_id: Uuid::new_v4(),
+        resolution_id: id,
+    };
+
+    info!(correlation_id = %command.correlation_id, "handling archive_resolution command");
+
+    let stored_events = command_handlers::handle_archive_resolution(
+        &command,
+        state.clock.as_ref(),
+        &*state.event_repository,
+    )
+    .await?;
+
+    let event_ids = stored_events.iter().map(|e| e.event_id).collect();
+
+    Ok(Json(CommandResponse { event_ids }))
+}
+
 /// Returns the router for the rules context.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_resolutions))
-        .route("/{resolution_id}", get(get_resolution))
+        .route(
+            "/{resolution_id}",
+            get(get_resolution).delete(archive_resolution),
+        )
         .route("/declare-intent", post(declare_intent))
         .route("/resolve-check", post(resolve_check))
         .route("/produce-effects", post(produce_effects))
@@ -654,6 +682,77 @@ mod tests {
         let request = Request::builder()
             .method("GET")
             .uri("/")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(json["error"], "infrastructure_error");
+    }
+
+    // --- DELETE /{resolution_id} tests ---
+
+    #[tokio::test]
+    async fn test_archive_resolution_returns_200_with_event_ids() {
+        let resolution_id = Uuid::new_v4();
+        let repo =
+            RecordingEventRepository::new(Ok(vec![intent_declared_stored_event(resolution_id)]));
+        let app = router().with_state(app_state_with(Arc::new(repo)));
+
+        let request = Request::builder()
+            .method("DELETE")
+            .uri(format!("/{resolution_id}"))
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+        let event_ids = json["event_ids"].as_array().unwrap();
+        assert_eq!(event_ids.len(), 1);
+        for id in event_ids {
+            Uuid::parse_str(id.as_str().unwrap()).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn test_archive_resolution_returns_404_when_not_found() {
+        let app = router().with_state(test_app_state());
+        let resolution_id = Uuid::new_v4();
+
+        let request = Request::builder()
+            .method("DELETE")
+            .uri(format!("/{resolution_id}"))
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(json["error"], "aggregate_not_found");
+    }
+
+    #[tokio::test]
+    async fn test_archive_resolution_returns_500_when_repository_fails() {
+        let app = router().with_state(failing_app_state());
+        let resolution_id = Uuid::new_v4();
+
+        let request = Request::builder()
+            .method("DELETE")
+            .uri(format!("/{resolution_id}"))
             .body(Body::empty())
             .unwrap();
 

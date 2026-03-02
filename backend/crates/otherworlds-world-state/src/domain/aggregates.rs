@@ -4,11 +4,13 @@ use std::collections::HashMap;
 
 use otherworlds_core::aggregate::AggregateRoot;
 use otherworlds_core::clock::Clock;
+use otherworlds_core::error::DomainError;
 use otherworlds_core::event::EventMetadata;
 use uuid::Uuid;
 
 use super::events::{
-    DispositionUpdated, FlagSet, WorldFactChanged, WorldStateEvent, WorldStateEventKind,
+    DispositionUpdated, FlagSet, WorldFactChanged, WorldSnapshotArchived, WorldStateEvent,
+    WorldStateEventKind,
 };
 
 /// The aggregate root for a world snapshot.
@@ -24,6 +26,8 @@ pub struct WorldSnapshot {
     pub(crate) flags: HashMap<String, bool>,
     /// Entity IDs whose dispositions have been updated.
     pub(crate) disposition_entity_ids: Vec<Uuid>,
+    /// Whether this world snapshot has been archived (soft-deleted).
+    pub(crate) archived: bool,
     /// Uncommitted events pending persistence.
     uncommitted_events: Vec<WorldStateEvent>,
 }
@@ -38,6 +42,7 @@ impl WorldSnapshot {
             facts: Vec::new(),
             flags: HashMap::new(),
             disposition_entity_ids: Vec::new(),
+            archived: false,
             uncommitted_events: Vec::new(),
         }
     }
@@ -124,6 +129,37 @@ impl WorldSnapshot {
 
         self.uncommitted_events.push(event);
     }
+
+    /// Archives (soft-deletes) the world snapshot, producing a `WorldSnapshotArchived` event.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DomainError::Validation` if the world snapshot is already archived.
+    pub fn archive(&mut self, correlation_id: Uuid, clock: &dyn Clock) -> Result<(), DomainError> {
+        if self.archived {
+            return Err(DomainError::Validation(
+                "world snapshot is already archived".into(),
+            ));
+        }
+
+        let event = WorldStateEvent {
+            metadata: EventMetadata {
+                event_id: Uuid::new_v4(),
+                event_type: "world_state.world_snapshot_archived".to_owned(),
+                aggregate_id: self.id,
+                sequence_number: self.next_sequence_number(),
+                correlation_id,
+                causation_id: correlation_id,
+                occurred_at: clock.now(),
+            },
+            kind: WorldStateEventKind::WorldSnapshotArchived(WorldSnapshotArchived {
+                world_id: self.id,
+            }),
+        };
+
+        self.uncommitted_events.push(event);
+        Ok(())
+    }
 }
 
 impl AggregateRoot for WorldSnapshot {
@@ -147,6 +183,9 @@ impl AggregateRoot for WorldSnapshot {
             }
             WorldStateEventKind::DispositionUpdated(payload) => {
                 self.disposition_entity_ids.push(payload.entity_id);
+            }
+            WorldStateEventKind::WorldSnapshotArchived(_) => {
+                self.archived = true;
             }
         }
         self.version += 1;
@@ -356,6 +395,111 @@ mod tests {
             }
             other => panic!("expected FlagSet, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_archive_produces_world_snapshot_archived_event() {
+        // Arrange
+        let world_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let mut snapshot = WorldSnapshot::new(world_id);
+
+        // Act
+        let result = snapshot.archive(correlation_id, &clock);
+
+        // Assert
+        assert!(result.is_ok());
+
+        let events = snapshot.uncommitted_events();
+        assert_eq!(events.len(), 1);
+
+        let event = &events[0];
+        assert_eq!(event.event_type(), "world_state.world_snapshot_archived");
+
+        let meta = event.metadata();
+        assert_eq!(meta.aggregate_id, world_id);
+        assert_eq!(meta.sequence_number, 1);
+        assert_eq!(meta.correlation_id, correlation_id);
+        assert_eq!(meta.causation_id, correlation_id);
+        assert_eq!(meta.occurred_at, fixed_now);
+
+        match &event.kind {
+            WorldStateEventKind::WorldSnapshotArchived(payload) => {
+                assert_eq!(payload.world_id, world_id);
+            }
+            other => panic!("expected WorldSnapshotArchived, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_archive_already_archived_returns_error() {
+        // Arrange
+        let world_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let mut snapshot = WorldSnapshot::new(world_id);
+
+        // Apply an archived event to set archived = true
+        let event = WorldStateEvent {
+            metadata: EventMetadata {
+                event_id: Uuid::new_v4(),
+                event_type: "world_state.world_snapshot_archived".to_owned(),
+                aggregate_id: world_id,
+                sequence_number: 1,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+            kind: WorldStateEventKind::WorldSnapshotArchived(
+                super::super::events::WorldSnapshotArchived { world_id },
+            ),
+        };
+        snapshot.apply(&event);
+
+        // Act
+        let result = snapshot.archive(Uuid::new_v4(), &clock);
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            otherworlds_core::error::DomainError::Validation(msg) => {
+                assert_eq!(msg, "world snapshot is already archived");
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_apply_world_snapshot_archived_sets_archived_flag() {
+        // Arrange
+        let world_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let mut snapshot = WorldSnapshot::new(world_id);
+        assert!(!snapshot.archived);
+
+        let event = WorldStateEvent {
+            metadata: EventMetadata {
+                event_id: Uuid::new_v4(),
+                event_type: "world_state.world_snapshot_archived".to_owned(),
+                aggregate_id: world_id,
+                sequence_number: 1,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+            kind: WorldStateEventKind::WorldSnapshotArchived(
+                super::super::events::WorldSnapshotArchived { world_id },
+            ),
+        };
+
+        // Act
+        snapshot.apply(&event);
+
+        // Assert
+        assert!(snapshot.archived);
+        assert_eq!(snapshot.version, 1);
     }
 
     #[test]

@@ -8,8 +8,8 @@ use otherworlds_core::rng::DeterministicRng;
 use uuid::Uuid;
 
 use super::events::{
-    CheckOutcome, CheckResolved, EffectsProduced, IntentDeclared, ResolvedEffect, RulesEvent,
-    RulesEventKind, determine_outcome,
+    CheckOutcome, CheckResolved, EffectsProduced, IntentDeclared, ResolutionArchived,
+    ResolvedEffect, RulesEvent, RulesEventKind, determine_outcome,
 };
 
 /// Resolution phase state machine.
@@ -75,6 +75,8 @@ pub struct Resolution {
     pub(crate) check_result: Option<CheckResult>,
     /// Produced effects (set after `EffectsProduced`).
     pub(crate) effects: Vec<ResolvedEffect>,
+    /// Whether this resolution has been archived (soft-deleted).
+    pub(crate) archived: bool,
     /// Uncommitted events pending persistence.
     uncommitted_events: Vec<RulesEvent>,
 }
@@ -90,6 +92,7 @@ impl Resolution {
             intent: None,
             check_result: None,
             effects: Vec::new(),
+            archived: false,
             uncommitted_events: Vec::new(),
         }
     }
@@ -252,6 +255,37 @@ impl Resolution {
         self.uncommitted_events.push(event);
         Ok(())
     }
+
+    /// Archives (soft-deletes) this resolution, producing a `ResolutionArchived` event.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DomainError::Validation` if the resolution is already archived.
+    pub fn archive(&mut self, correlation_id: Uuid, clock: &dyn Clock) -> Result<(), DomainError> {
+        if self.archived {
+            return Err(DomainError::Validation(
+                "resolution is already archived".to_owned(),
+            ));
+        }
+
+        let event = RulesEvent {
+            metadata: EventMetadata {
+                event_id: Uuid::new_v4(),
+                event_type: "rules.resolution_archived".to_owned(),
+                aggregate_id: self.id,
+                sequence_number: self.next_sequence_number(),
+                correlation_id,
+                causation_id: correlation_id,
+                occurred_at: clock.now(),
+            },
+            kind: RulesEventKind::ResolutionArchived(ResolutionArchived {
+                resolution_id: self.id,
+            }),
+        };
+
+        self.uncommitted_events.push(event);
+        Ok(())
+    }
 }
 
 impl AggregateRoot for Resolution {
@@ -292,6 +326,9 @@ impl AggregateRoot for Resolution {
             RulesEventKind::EffectsProduced(payload) => {
                 self.phase = ResolutionPhase::EffectsProduced;
                 self.effects.clone_from(&payload.effects);
+            }
+            RulesEventKind::ResolutionArchived(_) => {
+                self.archived = true;
             }
         }
         self.version += 1;
@@ -1061,5 +1098,70 @@ mod tests {
         assert!(resolution.intent.is_some());
         assert!(resolution.check_result.is_some());
         assert_eq!(resolution.effects.len(), 1);
+    }
+
+    // --- archive tests ---
+
+    #[test]
+    fn test_archive_produces_resolution_archived_event() {
+        let resolution_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let clock = fixed_clock();
+        let mut resolution = Resolution::new(resolution_id);
+
+        let result = resolution.archive(correlation_id, &clock);
+
+        assert!(result.is_ok());
+        let events = resolution.uncommitted_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type(), "rules.resolution_archived");
+
+        let meta = events[0].metadata();
+        assert_eq!(meta.aggregate_id, resolution_id);
+        assert_eq!(meta.sequence_number, 1);
+        assert_eq!(meta.correlation_id, correlation_id);
+    }
+
+    #[test]
+    fn test_apply_resolution_archived_sets_flag() {
+        let resolution_id = Uuid::new_v4();
+        let mut resolution = Resolution::new(resolution_id);
+        assert!(!resolution.archived);
+
+        let event = RulesEvent {
+            metadata: EventMetadata {
+                event_id: Uuid::new_v4(),
+                event_type: "rules.resolution_archived".to_owned(),
+                aggregate_id: resolution_id,
+                sequence_number: 1,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: Utc::now(),
+            },
+            kind: RulesEventKind::ResolutionArchived(super::super::events::ResolutionArchived {
+                resolution_id,
+            }),
+        };
+
+        resolution.apply(&event);
+
+        assert!(resolution.archived);
+        assert_eq!(resolution.version, 1);
+    }
+
+    #[test]
+    fn test_archive_already_archived_returns_error() {
+        let mut resolution = Resolution::new(Uuid::new_v4());
+        resolution.archived = true;
+
+        let result = resolution.archive(Uuid::new_v4(), &fixed_clock());
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::Validation(msg) => {
+                assert_eq!(msg, "resolution is already archived");
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
     }
 }

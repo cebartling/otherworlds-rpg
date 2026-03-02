@@ -29,6 +29,13 @@ pub struct ChoicePresented {
     pub choice_id: Uuid,
 }
 
+/// Emitted when a session is archived (soft-deleted).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionArchived {
+    /// The session identifier.
+    pub session_id: Uuid,
+}
+
 /// Event payload variants for the Narrative Orchestration context.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum NarrativeEventKind {
@@ -38,6 +45,8 @@ pub enum NarrativeEventKind {
     BeatAdvanced(BeatAdvanced),
     /// A choice has been presented to the player.
     ChoicePresented(ChoicePresented),
+    /// A session has been archived (soft-deleted).
+    SessionArchived(SessionArchived),
 }
 
 /// Domain event envelope for the Narrative Orchestration context.
@@ -55,6 +64,7 @@ impl DomainEvent for NarrativeEvent {
             NarrativeEventKind::SceneStarted(_) => "narrative.scene_started",
             NarrativeEventKind::BeatAdvanced(_) => "narrative.beat_advanced",
             NarrativeEventKind::ChoicePresented(_) => "narrative.choice_presented",
+            NarrativeEventKind::SessionArchived(_) => "narrative.session_archived",
         }
     }
 

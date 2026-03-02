@@ -61,3 +61,22 @@ impl Command for BranchTimeline {
         self.correlation_id
     }
 }
+
+/// Command to archive (soft-delete) a campaign run.
+#[derive(Debug, Clone)]
+pub struct ArchiveCampaignRun {
+    /// The correlation ID for tracing.
+    pub correlation_id: Uuid,
+    /// The campaign run to archive.
+    pub run_id: Uuid,
+}
+
+impl Command for ArchiveCampaignRun {
+    fn command_type(&self) -> &'static str {
+        "session.archive_campaign_run"
+    }
+
+    fn correlation_id(&self) -> Uuid {
+        self.correlation_id
+    }
+}

@@ -26,6 +26,7 @@ const EVENT_TYPES: &[&str] = &[
     "inventory.item_added",
     "inventory.item_removed",
     "inventory.item_equipped",
+    "inventory.inventory_archived",
 ];
 
 /// Summary view for listing inventories.
@@ -55,6 +56,9 @@ pub async fn list_inventories(
             continue;
         }
         let inventory = command_handlers::reconstitute(id, &stored_events)?;
+        if inventory.archived {
+            continue;
+        }
         summaries.push(InventorySummary {
             inventory_id: id,
             item_count: inventory.items.len(),
@@ -99,7 +103,10 @@ mod tests {
     use uuid::Uuid;
 
     use crate::application::query_handlers::{get_inventory_by_id, list_inventories};
-    use crate::domain::events::{ITEM_ADDED_EVENT_TYPE, InventoryEventKind, ItemAdded};
+    use crate::domain::events::{
+        INVENTORY_ARCHIVED_EVENT_TYPE, ITEM_ADDED_EVENT_TYPE, InventoryArchived,
+        InventoryEventKind, ItemAdded,
+    };
     use otherworlds_test_support::{EmptyEventRepository, RecordingEventRepository};
 
     #[tokio::test]
@@ -207,5 +214,47 @@ mod tests {
         assert_eq!(result[0].inventory_id, inventory_id);
         assert_eq!(result[0].item_count, 1);
         assert_eq!(result[0].version, 1);
+    }
+
+    #[tokio::test]
+    async fn test_list_inventories_excludes_archived() {
+        let inventory_id = Uuid::new_v4();
+        let item_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+
+        let events = vec![
+            StoredEvent {
+                event_id: Uuid::new_v4(),
+                aggregate_id: inventory_id,
+                event_type: ITEM_ADDED_EVENT_TYPE.to_owned(),
+                payload: serde_json::to_value(InventoryEventKind::ItemAdded(ItemAdded {
+                    inventory_id,
+                    item_id,
+                }))
+                .unwrap(),
+                sequence_number: 1,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+            StoredEvent {
+                event_id: Uuid::new_v4(),
+                aggregate_id: inventory_id,
+                event_type: INVENTORY_ARCHIVED_EVENT_TYPE.to_owned(),
+                payload: serde_json::to_value(InventoryEventKind::InventoryArchived(
+                    InventoryArchived { inventory_id },
+                ))
+                .unwrap(),
+                sequence_number: 2,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+        ];
+        let repo = RecordingEventRepository::with_aggregate_ids(Ok(events), vec![inventory_id]);
+
+        let result = list_inventories(&repo).await.unwrap();
+
+        assert!(result.is_empty());
     }
 }

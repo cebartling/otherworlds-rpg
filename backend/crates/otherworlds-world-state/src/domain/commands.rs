@@ -67,3 +67,22 @@ impl Command for UpdateDisposition {
         self.correlation_id
     }
 }
+
+/// Command to archive (soft-delete) a world snapshot.
+#[derive(Debug, Clone)]
+pub struct ArchiveWorldSnapshot {
+    /// The correlation ID for tracing.
+    pub correlation_id: Uuid,
+    /// The world snapshot identifier.
+    pub world_id: Uuid,
+}
+
+impl Command for ArchiveWorldSnapshot {
+    fn command_type(&self) -> &'static str {
+        "world_state.archive_world_snapshot"
+    }
+
+    fn correlation_id(&self) -> Uuid {
+        self.correlation_id
+    }
+}

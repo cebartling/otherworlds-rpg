@@ -33,6 +33,13 @@ pub struct TimelineBranched {
     pub from_checkpoint_id: Uuid,
 }
 
+/// Emitted when a campaign run is archived (soft-deleted).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CampaignRunArchived {
+    /// The campaign run identifier.
+    pub run_id: Uuid,
+}
+
 /// Event type identifier for [`CampaignRunStarted`].
 pub const CAMPAIGN_RUN_STARTED_EVENT_TYPE: &str = "session.campaign_run_started";
 
@@ -41,6 +48,9 @@ pub const CHECKPOINT_CREATED_EVENT_TYPE: &str = "session.checkpoint_created";
 
 /// Event type identifier for [`TimelineBranched`].
 pub const TIMELINE_BRANCHED_EVENT_TYPE: &str = "session.timeline_branched";
+
+/// Event type identifier for [`CampaignRunArchived`].
+pub const CAMPAIGN_RUN_ARCHIVED_EVENT_TYPE: &str = "session.campaign_run_archived";
 
 /// Event payload variants for the Session & Progress context.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,6 +61,8 @@ pub enum SessionEventKind {
     CheckpointCreated(CheckpointCreated),
     /// A timeline has been branched.
     TimelineBranched(TimelineBranched),
+    /// A campaign run has been archived (soft-deleted).
+    CampaignRunArchived(CampaignRunArchived),
 }
 
 /// Domain event envelope for the Session & Progress context.
@@ -68,6 +80,7 @@ impl DomainEvent for SessionEvent {
             SessionEventKind::CampaignRunStarted(_) => CAMPAIGN_RUN_STARTED_EVENT_TYPE,
             SessionEventKind::CheckpointCreated(_) => CHECKPOINT_CREATED_EVENT_TYPE,
             SessionEventKind::TimelineBranched(_) => TIMELINE_BRANCHED_EVENT_TYPE,
+            SessionEventKind::CampaignRunArchived(_) => CAMPAIGN_RUN_ARCHIVED_EVENT_TYPE,
         }
     }
 

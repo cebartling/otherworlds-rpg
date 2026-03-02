@@ -28,6 +28,7 @@ const EVENT_TYPES: &[&str] = &[
     "narrative.beat_advanced",
     "narrative.choice_presented",
     "narrative.scene_started",
+    "narrative.session_archived",
 ];
 
 /// Summary view for listing narrative sessions.
@@ -57,6 +58,9 @@ pub async fn list_sessions(
             continue;
         }
         let session = command_handlers::reconstitute(id, &stored_events)?;
+        if session.archived {
+            continue;
+        }
         summaries.push(NarrativeSessionSummary {
             session_id: id,
             current_beat_id: session.current_beat_id,
@@ -97,7 +101,7 @@ mod tests {
     use uuid::Uuid;
 
     use crate::application::query_handlers::{get_session_by_id, list_sessions};
-    use crate::domain::events::{BeatAdvanced, NarrativeEventKind};
+    use crate::domain::events::{BeatAdvanced, NarrativeEventKind, SessionArchived};
     use otherworlds_test_support::{EmptyEventRepository, RecordingEventRepository};
 
     #[tokio::test]
@@ -193,5 +197,47 @@ mod tests {
         assert_eq!(result[0].session_id, session_id);
         assert_eq!(result[0].current_beat_id, Some(beat_id));
         assert_eq!(result[0].version, 1);
+    }
+
+    #[tokio::test]
+    async fn test_list_sessions_excludes_archived() {
+        let session_id = Uuid::new_v4();
+        let beat_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+
+        let events = vec![
+            StoredEvent {
+                event_id: Uuid::new_v4(),
+                aggregate_id: session_id,
+                event_type: "narrative.beat_advanced".to_owned(),
+                payload: serde_json::to_value(NarrativeEventKind::BeatAdvanced(BeatAdvanced {
+                    session_id,
+                    beat_id,
+                }))
+                .unwrap(),
+                sequence_number: 1,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+            StoredEvent {
+                event_id: Uuid::new_v4(),
+                aggregate_id: session_id,
+                event_type: "narrative.session_archived".to_owned(),
+                payload: serde_json::to_value(NarrativeEventKind::SessionArchived(
+                    SessionArchived { session_id },
+                ))
+                .unwrap(),
+                sequence_number: 2,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+        ];
+        let repo = RecordingEventRepository::with_aggregate_ids(Ok(events), vec![session_id]);
+
+        let result = list_sessions(&repo).await.unwrap();
+
+        assert!(result.is_empty());
     }
 }

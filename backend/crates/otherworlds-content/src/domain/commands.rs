@@ -59,3 +59,22 @@ impl Command for CompileCampaign {
         self.correlation_id
     }
 }
+
+/// Command to archive (soft-delete) a campaign.
+#[derive(Debug, Clone)]
+pub struct ArchiveCampaign {
+    /// The correlation ID for tracing.
+    pub correlation_id: Uuid,
+    /// The campaign identifier.
+    pub campaign_id: Uuid,
+}
+
+impl Command for ArchiveCampaign {
+    fn command_type(&self) -> &'static str {
+        "content.archive_campaign"
+    }
+
+    fn correlation_id(&self) -> Uuid {
+        self.correlation_id
+    }
+}

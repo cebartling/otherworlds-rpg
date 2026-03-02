@@ -11,7 +11,9 @@ use otherworlds_core::repository::{EventRepository, StoredEvent};
 use uuid::Uuid;
 
 use crate::domain::aggregates::CampaignRun;
-use crate::domain::commands::{BranchTimeline, CreateCheckpoint, StartCampaignRun};
+use crate::domain::commands::{
+    ArchiveCampaignRun, BranchTimeline, CreateCheckpoint, StartCampaignRun,
+};
 use crate::domain::events::{SessionEvent, SessionEventKind};
 
 /// Result of a successfully handled command.
@@ -91,7 +93,7 @@ pub async fn handle_start_campaign_run(
         .map(to_stored_event)
         .collect();
 
-    repo.append_events(run_id, run.version, &stored_events)
+    repo.append_events(run_id, run.version(), &stored_events)
         .await?;
 
     Ok(SessionCommandResult {
@@ -116,6 +118,9 @@ pub async fn handle_create_checkpoint(
         return Err(DomainError::AggregateNotFound(command.run_id));
     }
     let mut run = reconstitute(command.run_id, &existing_events)?;
+    if run.archived {
+        return Err(DomainError::Validation("campaign run is archived".into()));
+    }
 
     run.create_checkpoint(command.correlation_id, clock);
 
@@ -125,7 +130,7 @@ pub async fn handle_create_checkpoint(
         .map(to_stored_event)
         .collect();
 
-    repo.append_events(command.run_id, run.version, &stored_events)
+    repo.append_events(command.run_id, run.version(), &stored_events)
         .await?;
 
     Ok(SessionCommandResult {
@@ -151,6 +156,10 @@ pub async fn handle_branch_timeline(
     if source_events.is_empty() {
         return Err(DomainError::AggregateNotFound(command.source_run_id));
     }
+    let source_run = reconstitute(command.source_run_id, &source_events)?;
+    if source_run.archived {
+        return Err(DomainError::Validation("campaign run is archived".into()));
+    }
 
     let branch_run_id = Uuid::new_v4();
     let mut branch = CampaignRun::new(branch_run_id);
@@ -168,11 +177,47 @@ pub async fn handle_branch_timeline(
         .map(to_stored_event)
         .collect();
 
-    repo.append_events(branch_run_id, branch.version, &stored_events)
+    repo.append_events(branch_run_id, branch.version(), &stored_events)
         .await?;
 
     Ok(SessionCommandResult {
         aggregate_id: branch_run_id,
+        stored_events,
+    })
+}
+
+/// Handles the `ArchiveCampaignRun` command: reconstitutes the aggregate,
+/// archives it (soft-delete), and persists the resulting events.
+///
+/// # Errors
+///
+/// Returns `DomainError::AggregateNotFound` if no events exist for the run ID.
+/// Returns `DomainError::Validation` if the campaign run is already archived.
+/// Returns `DomainError` if event loading or appending fails.
+pub async fn handle_archive_campaign_run(
+    command: &ArchiveCampaignRun,
+    clock: &dyn Clock,
+    repo: &dyn EventRepository,
+) -> Result<SessionCommandResult, DomainError> {
+    let existing_events = repo.load_events(command.run_id).await?;
+    if existing_events.is_empty() {
+        return Err(DomainError::AggregateNotFound(command.run_id));
+    }
+    let mut run = reconstitute(command.run_id, &existing_events)?;
+
+    run.archive(command.correlation_id, clock)?;
+
+    let stored_events: Vec<StoredEvent> = run
+        .uncommitted_events()
+        .iter()
+        .map(to_stored_event)
+        .collect();
+
+    repo.append_events(command.run_id, run.version(), &stored_events)
+        .await?;
+
+    Ok(SessionCommandResult {
+        aggregate_id: command.run_id,
         stored_events,
     })
 }
@@ -185,10 +230,13 @@ mod tests {
     use uuid::Uuid;
 
     use crate::application::command_handlers::{
-        handle_branch_timeline, handle_create_checkpoint, handle_start_campaign_run,
+        handle_archive_campaign_run, handle_branch_timeline, handle_create_checkpoint,
+        handle_start_campaign_run,
     };
-    use crate::domain::commands::{BranchTimeline, CreateCheckpoint, StartCampaignRun};
-    use crate::domain::events::{CampaignRunStarted, SessionEventKind};
+    use crate::domain::commands::{
+        ArchiveCampaignRun, BranchTimeline, CreateCheckpoint, StartCampaignRun,
+    };
+    use crate::domain::events::{CampaignRunArchived, CampaignRunStarted, SessionEventKind};
     use otherworlds_test_support::{FixedClock, RecordingEventRepository};
 
     #[tokio::test]
@@ -378,6 +426,198 @@ mod tests {
         match result.unwrap_err() {
             DomainError::AggregateNotFound(id) => assert_eq!(id, source_run_id),
             other => panic!("expected AggregateNotFound, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_archive_campaign_run_persists_campaign_run_archived_event() {
+        // Arrange
+        let run_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let existing_event = dummy_stored_event(run_id, fixed_now);
+        let repo = RecordingEventRepository::new(Ok(vec![existing_event]));
+
+        let command = ArchiveCampaignRun {
+            correlation_id,
+            run_id,
+        };
+
+        // Act
+        let result = handle_archive_campaign_run(&command, &clock, &repo).await;
+
+        // Assert
+        let cmd_result = result.unwrap();
+        assert_eq!(cmd_result.aggregate_id, run_id);
+        assert_eq!(cmd_result.stored_events.len(), 1);
+
+        let appended = repo.appended_events();
+        assert_eq!(appended.len(), 1);
+
+        let (agg_id, expected_version, events) = &appended[0];
+        assert_eq!(*agg_id, run_id);
+        assert_eq!(*expected_version, 1);
+        assert_eq!(events.len(), 1);
+
+        let stored = &events[0];
+        assert_eq!(stored.event_type, "session.campaign_run_archived");
+        assert_eq!(stored.aggregate_id, run_id);
+        assert_eq!(stored.sequence_number, 2);
+        assert_eq!(stored.correlation_id, correlation_id);
+        assert_eq!(stored.causation_id, correlation_id);
+        assert_eq!(stored.occurred_at, fixed_now);
+    }
+
+    #[tokio::test]
+    async fn test_handle_archive_campaign_run_returns_error_when_run_not_found() {
+        // Arrange
+        let run_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let repo = RecordingEventRepository::new(Ok(Vec::new()));
+
+        let command = ArchiveCampaignRun {
+            correlation_id,
+            run_id,
+        };
+
+        // Act
+        let result = handle_archive_campaign_run(&command, &clock, &repo).await;
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::AggregateNotFound(id) => assert_eq!(id, run_id),
+            other => panic!("expected AggregateNotFound, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_archive_campaign_run_returns_error_when_already_archived() {
+        // Arrange
+        let run_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let existing_event = dummy_stored_event(run_id, fixed_now);
+        let archived_event = StoredEvent {
+            event_id: Uuid::new_v4(),
+            aggregate_id: run_id,
+            event_type: "session.campaign_run_archived".to_owned(),
+            payload: serde_json::to_value(SessionEventKind::CampaignRunArchived(
+                CampaignRunArchived { run_id },
+            ))
+            .unwrap(),
+            sequence_number: 2,
+            correlation_id: Uuid::new_v4(),
+            causation_id: Uuid::new_v4(),
+            occurred_at: fixed_now,
+        };
+        let repo = RecordingEventRepository::new(Ok(vec![existing_event, archived_event]));
+
+        let command = ArchiveCampaignRun {
+            correlation_id,
+            run_id,
+        };
+
+        // Act
+        let result = handle_archive_campaign_run(&command, &clock, &repo).await;
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::Validation(msg) => {
+                assert_eq!(msg, "campaign run is already archived");
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_create_checkpoint_returns_error_when_archived() {
+        // Arrange
+        let run_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let existing_event = dummy_stored_event(run_id, fixed_now);
+        let archived_event = StoredEvent {
+            event_id: Uuid::new_v4(),
+            aggregate_id: run_id,
+            event_type: "session.campaign_run_archived".to_owned(),
+            payload: serde_json::to_value(SessionEventKind::CampaignRunArchived(
+                CampaignRunArchived { run_id },
+            ))
+            .unwrap(),
+            sequence_number: 2,
+            correlation_id: Uuid::new_v4(),
+            causation_id: Uuid::new_v4(),
+            occurred_at: fixed_now,
+        };
+        let repo = RecordingEventRepository::new(Ok(vec![existing_event, archived_event]));
+
+        let command = CreateCheckpoint {
+            correlation_id,
+            run_id,
+        };
+
+        // Act
+        let result = handle_create_checkpoint(&command, &clock, &repo).await;
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::Validation(msg) => {
+                assert_eq!(msg, "campaign run is archived");
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_branch_timeline_returns_error_when_source_archived() {
+        // Arrange
+        let source_run_id = Uuid::new_v4();
+        let from_checkpoint_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let existing_event = dummy_stored_event(source_run_id, fixed_now);
+        let archived_event = StoredEvent {
+            event_id: Uuid::new_v4(),
+            aggregate_id: source_run_id,
+            event_type: "session.campaign_run_archived".to_owned(),
+            payload: serde_json::to_value(SessionEventKind::CampaignRunArchived(
+                CampaignRunArchived {
+                    run_id: source_run_id,
+                },
+            ))
+            .unwrap(),
+            sequence_number: 2,
+            correlation_id: Uuid::new_v4(),
+            causation_id: Uuid::new_v4(),
+            occurred_at: fixed_now,
+        };
+        let repo = RecordingEventRepository::new(Ok(vec![existing_event, archived_event]));
+
+        let command = BranchTimeline {
+            correlation_id,
+            source_run_id,
+            from_checkpoint_id,
+        };
+
+        // Act
+        let result = handle_branch_timeline(&command, &clock, &repo).await;
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::Validation(msg) => {
+                assert_eq!(msg, "campaign run is archived");
+            }
+            other => panic!("expected Validation, got {other:?}"),
         }
     }
 }

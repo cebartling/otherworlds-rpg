@@ -2,13 +2,14 @@
 
 use otherworlds_core::aggregate::AggregateRoot;
 use otherworlds_core::clock::Clock;
+use otherworlds_core::error::DomainError;
 use otherworlds_core::event::EventMetadata;
 use uuid::Uuid;
 
 use super::events::{
-    CAMPAIGN_RUN_STARTED_EVENT_TYPE, CHECKPOINT_CREATED_EVENT_TYPE, CampaignRunStarted,
-    CheckpointCreated, SessionEvent, SessionEventKind, TIMELINE_BRANCHED_EVENT_TYPE,
-    TimelineBranched,
+    CAMPAIGN_RUN_ARCHIVED_EVENT_TYPE, CAMPAIGN_RUN_STARTED_EVENT_TYPE,
+    CHECKPOINT_CREATED_EVENT_TYPE, CampaignRunArchived, CampaignRunStarted, CheckpointCreated,
+    SessionEvent, SessionEventKind, TIMELINE_BRANCHED_EVENT_TYPE, TimelineBranched,
 };
 
 /// The aggregate root for a campaign run.
@@ -24,6 +25,8 @@ pub struct CampaignRun {
     pub(crate) checkpoint_ids: Vec<Uuid>,
     /// Branch source: (`source_run_id`, `from_checkpoint_id`) if this run was branched.
     pub(crate) branch_source: Option<(Uuid, Uuid)>,
+    /// Whether this campaign run has been archived (soft-deleted).
+    pub(crate) archived: bool,
     /// Uncommitted events pending persistence.
     uncommitted_events: Vec<SessionEvent>,
 }
@@ -38,6 +41,7 @@ impl CampaignRun {
             campaign_id: None,
             checkpoint_ids: Vec::new(),
             branch_source: None,
+            archived: false,
             uncommitted_events: Vec::new(),
         }
     }
@@ -129,6 +133,34 @@ impl CampaignRun {
 
         self.uncommitted_events.push(event);
     }
+
+    /// Archives (soft-deletes) a campaign run, producing a `CampaignRunArchived` event.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DomainError::Validation` if the campaign run is already archived.
+    pub fn archive(&mut self, correlation_id: Uuid, clock: &dyn Clock) -> Result<(), DomainError> {
+        if self.archived {
+            return Err(DomainError::Validation(
+                "campaign run is already archived".into(),
+            ));
+        }
+        let event = SessionEvent {
+            metadata: EventMetadata {
+                event_id: Uuid::new_v4(),
+                event_type: CAMPAIGN_RUN_ARCHIVED_EVENT_TYPE.to_owned(),
+                aggregate_id: self.id,
+                sequence_number: self.next_sequence_number(),
+                correlation_id,
+                causation_id: correlation_id,
+                occurred_at: clock.now(),
+            },
+            kind: SessionEventKind::CampaignRunArchived(CampaignRunArchived { run_id: self.id }),
+        };
+
+        self.uncommitted_events.push(event);
+        Ok(())
+    }
 }
 
 impl AggregateRoot for CampaignRun {
@@ -153,6 +185,9 @@ impl AggregateRoot for CampaignRun {
             SessionEventKind::TimelineBranched(payload) => {
                 self.branch_source = Some((payload.source_run_id, payload.from_checkpoint_id));
             }
+            SessionEventKind::CampaignRunArchived(_) => {
+                self.archived = true;
+            }
         }
         self.version += 1;
     }
@@ -171,6 +206,7 @@ mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
     use otherworlds_core::aggregate::AggregateRoot;
+    use otherworlds_core::error::DomainError;
     use otherworlds_core::event::DomainEvent;
     use otherworlds_test_support::FixedClock;
 
@@ -374,6 +410,97 @@ mod tests {
                 assert_eq!(payload.from_checkpoint_id, from_checkpoint_id);
             }
             other => panic!("expected TimelineBranched, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_archive_produces_campaign_run_archived_event() {
+        // Arrange
+        let run_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let mut run = CampaignRun::new(run_id);
+
+        // Act
+        run.archive(correlation_id, &clock).unwrap();
+
+        // Assert
+        let events = run.uncommitted_events();
+        assert_eq!(events.len(), 1);
+
+        let event = &events[0];
+        assert_eq!(event.event_type(), "session.campaign_run_archived");
+
+        let meta = event.metadata();
+        assert_eq!(meta.aggregate_id, run_id);
+        assert_eq!(meta.sequence_number, 1);
+        assert_eq!(meta.correlation_id, correlation_id);
+        assert_eq!(meta.causation_id, correlation_id);
+        assert_eq!(meta.occurred_at, fixed_now);
+
+        match &event.kind {
+            SessionEventKind::CampaignRunArchived(payload) => {
+                assert_eq!(payload.run_id, run_id);
+            }
+            other => panic!("expected CampaignRunArchived, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_apply_campaign_run_archived_sets_archived_true() {
+        // Arrange
+        let run_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let mut run = CampaignRun::new(run_id);
+        assert!(!run.archived);
+
+        let event = SessionEvent {
+            metadata: EventMetadata {
+                event_id: Uuid::new_v4(),
+                event_type: CAMPAIGN_RUN_ARCHIVED_EVENT_TYPE.to_owned(),
+                aggregate_id: run_id,
+                sequence_number: 1,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+            kind: SessionEventKind::CampaignRunArchived(CampaignRunArchived { run_id }),
+        };
+
+        // Act
+        run.apply(&event);
+
+        // Assert
+        assert!(run.archived);
+        assert_eq!(run.version, 1);
+    }
+
+    #[test]
+    fn test_archive_returns_error_when_already_archived() {
+        // Arrange
+        let run_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let mut run = CampaignRun::new(run_id);
+
+        // Archive once — apply the event to update state.
+        run.archive(Uuid::new_v4(), &clock).unwrap();
+        for event in run.uncommitted_events().to_vec() {
+            run.apply(&event);
+        }
+        run.clear_uncommitted_events();
+
+        // Act — try to archive again.
+        let result = run.archive(Uuid::new_v4(), &clock);
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::Validation(msg) => {
+                assert_eq!(msg, "campaign run is already archived");
+            }
+            other => panic!("expected Validation, got {other:?}"),
         }
     }
 }

@@ -149,11 +149,39 @@ async fn compile_campaign(
     }))
 }
 
+/// DELETE /{`campaign_id`}
+#[instrument(skip(state), fields(campaign_id = %id))]
+async fn archive_campaign(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<CommandResponse>, ApiError> {
+    let command = commands::ArchiveCampaign {
+        correlation_id: Uuid::new_v4(),
+        campaign_id: id,
+    };
+
+    info!(correlation_id = %command.correlation_id, "handling archive_campaign command");
+
+    let result = command_handlers::handle_archive_campaign(
+        &command,
+        state.clock.as_ref(),
+        &*state.event_repository,
+    )
+    .await?;
+
+    let event_ids = result.stored_events.iter().map(|e| e.event_id).collect();
+
+    Ok(Json(CommandResponse {
+        aggregate_id: result.aggregate_id,
+        event_ids,
+    }))
+}
+
 /// Returns the router for the content context.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_campaigns))
-        .route("/{campaign_id}", get(get_campaign))
+        .route("/{campaign_id}", get(get_campaign).delete(archive_campaign))
         .route("/ingest-campaign", post(ingest_campaign))
         .route("/validate-campaign", post(validate_campaign))
         .route("/compile-campaign", post(compile_campaign))
@@ -167,8 +195,8 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use chrono::{TimeZone, Utc};
     use otherworlds_content::domain::events::{
-        CAMPAIGN_INGESTED_EVENT_TYPE, CAMPAIGN_VALIDATED_EVENT_TYPE, CampaignIngested,
-        CampaignValidated, ContentEventKind,
+        CAMPAIGN_ARCHIVED_EVENT_TYPE, CAMPAIGN_INGESTED_EVENT_TYPE, CAMPAIGN_VALIDATED_EVENT_TYPE,
+        CampaignArchived, CampaignIngested, CampaignValidated, ContentEventKind,
     };
     use otherworlds_core::clock::Clock;
     use otherworlds_core::error::DomainError;
@@ -290,6 +318,67 @@ mod tests {
         }
     }
 
+    /// Mock repository that returns `[CampaignIngested, CampaignArchived]`
+    /// events so the reconstituted campaign is in an archived state.
+    #[derive(Debug)]
+    struct ArchivedMockEventRepository;
+
+    #[async_trait::async_trait]
+    impl EventRepository for ArchivedMockEventRepository {
+        async fn load_events(&self, aggregate_id: Uuid) -> Result<Vec<StoredEvent>, DomainError> {
+            let fixed_now = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+            Ok(vec![
+                StoredEvent {
+                    event_id: Uuid::new_v4(),
+                    aggregate_id,
+                    event_type: CAMPAIGN_INGESTED_EVENT_TYPE.to_owned(),
+                    payload: serde_json::to_value(ContentEventKind::CampaignIngested(
+                        CampaignIngested {
+                            campaign_id: aggregate_id,
+                            version_hash: KNOWN_VERSION_HASH.to_owned(),
+                        },
+                    ))
+                    .expect("CampaignIngested serialization is infallible"),
+                    sequence_number: 1,
+                    correlation_id: Uuid::new_v4(),
+                    causation_id: Uuid::new_v4(),
+                    occurred_at: fixed_now,
+                },
+                StoredEvent {
+                    event_id: Uuid::new_v4(),
+                    aggregate_id,
+                    event_type: CAMPAIGN_ARCHIVED_EVENT_TYPE.to_owned(),
+                    payload: serde_json::to_value(ContentEventKind::CampaignArchived(
+                        CampaignArchived {
+                            campaign_id: aggregate_id,
+                        },
+                    ))
+                    .expect("CampaignArchived serialization is infallible"),
+                    sequence_number: 2,
+                    correlation_id: Uuid::new_v4(),
+                    causation_id: Uuid::new_v4(),
+                    occurred_at: fixed_now,
+                },
+            ])
+        }
+
+        async fn append_events(
+            &self,
+            _aggregate_id: Uuid,
+            _expected_version: i64,
+            _events: &[StoredEvent],
+        ) -> Result<(), DomainError> {
+            Ok(())
+        }
+
+        async fn list_aggregate_ids(
+            &self,
+            _event_types: &[&str],
+        ) -> Result<Vec<Uuid>, DomainError> {
+            Ok(vec![])
+        }
+    }
+
     fn app_state_with(event_repository: Arc<dyn EventRepository>) -> AppState {
         let pool = PgPool::connect_lazy("postgres://localhost/test").unwrap();
         let clock: Arc<dyn Clock + Send + Sync> = Arc::new(FixedClock(
@@ -309,6 +398,10 @@ mod tests {
 
     fn empty_app_state() -> AppState {
         app_state_with(Arc::new(EmptyEventRepository))
+    }
+
+    fn archived_app_state() -> AppState {
+        app_state_with(Arc::new(ArchivedMockEventRepository))
     }
 
     fn failing_app_state() -> AppState {
@@ -684,5 +777,90 @@ mod tests {
             .unwrap();
         let json: Value = serde_json::from_slice(&body_bytes).unwrap();
         assert_eq!(json["error"], "infrastructure_error");
+    }
+
+    #[tokio::test]
+    async fn test_delete_campaign_returns_200_with_event_ids() {
+        // Arrange
+        let app = router().with_state(test_app_state());
+        let campaign_id = Uuid::new_v4();
+
+        let request = Request::builder()
+            .method("DELETE")
+            .uri(format!("/{campaign_id}"))
+            .body(Body::empty())
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        let returned_id = Uuid::parse_str(json["aggregate_id"].as_str().unwrap()).unwrap();
+        assert_eq!(returned_id, campaign_id);
+
+        let event_ids = json["event_ids"].as_array().unwrap();
+        assert_eq!(event_ids.len(), 1);
+        for id in event_ids {
+            Uuid::parse_str(id.as_str().unwrap()).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn test_delete_campaign_returns_404_when_not_found() {
+        // Arrange
+        let app = router().with_state(empty_app_state());
+        let campaign_id = Uuid::new_v4();
+
+        let request = Request::builder()
+            .method("DELETE")
+            .uri(format!("/{campaign_id}"))
+            .body(Body::empty())
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        assert_eq!(json["error"], "aggregate_not_found");
+    }
+
+    #[tokio::test]
+    async fn test_delete_campaign_returns_400_when_already_archived() {
+        // Arrange
+        let app = router().with_state(archived_app_state());
+        let campaign_id = Uuid::new_v4();
+
+        let request = Request::builder()
+            .method("DELETE")
+            .uri(format!("/{campaign_id}"))
+            .body(Body::empty())
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        assert_eq!(json["error"], "validation_error");
     }
 }

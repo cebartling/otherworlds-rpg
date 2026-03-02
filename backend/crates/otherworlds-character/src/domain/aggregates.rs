@@ -7,8 +7,11 @@ use otherworlds_core::clock::Clock;
 use otherworlds_core::event::EventMetadata;
 use uuid::Uuid;
 
+use otherworlds_core::error::DomainError;
+
 use super::events::{
-    AttributeModified, CharacterCreated, CharacterEvent, CharacterEventKind, ExperienceGained,
+    AttributeModified, CharacterArchived, CharacterCreated, CharacterEvent, CharacterEventKind,
+    ExperienceGained,
 };
 
 /// The aggregate root for a character.
@@ -24,6 +27,8 @@ pub struct Character {
     pub(crate) attributes: HashMap<String, i32>,
     /// Total experience accumulated.
     pub(crate) experience: u32,
+    /// Whether this character has been archived (soft-deleted).
+    pub(crate) archived: bool,
     /// Uncommitted events pending persistence.
     uncommitted_events: Vec<CharacterEvent>,
 }
@@ -38,6 +43,7 @@ impl Character {
             name: None,
             attributes: HashMap::new(),
             experience: 0,
+            archived: false,
             uncommitted_events: Vec::new(),
         }
     }
@@ -102,6 +108,37 @@ impl Character {
         self.uncommitted_events.push(event);
     }
 
+    /// Archives (soft-deletes) a character, producing a `CharacterArchived` event.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DomainError::Validation` if the character is already archived.
+    pub fn archive(&mut self, correlation_id: Uuid, clock: &dyn Clock) -> Result<(), DomainError> {
+        if self.archived {
+            return Err(DomainError::Validation(
+                "character is already archived".into(),
+            ));
+        }
+
+        let event = CharacterEvent {
+            metadata: EventMetadata {
+                event_id: Uuid::new_v4(),
+                event_type: "character.character_archived".to_owned(),
+                aggregate_id: self.id,
+                sequence_number: self.next_sequence_number(),
+                correlation_id,
+                causation_id: correlation_id,
+                occurred_at: clock.now(),
+            },
+            kind: CharacterEventKind::CharacterArchived(CharacterArchived {
+                character_id: self.id,
+            }),
+        };
+
+        self.uncommitted_events.push(event);
+        Ok(())
+    }
+
     /// Awards experience to a character, producing an `ExperienceGained` event.
     pub fn award_experience(&mut self, amount: u32, correlation_id: Uuid, clock: &dyn Clock) {
         // TODO: event_id uses Uuid::new_v4() which breaks replay determinism.
@@ -148,6 +185,9 @@ impl AggregateRoot for Character {
             }
             CharacterEventKind::ExperienceGained(payload) => {
                 self.experience += payload.amount;
+            }
+            CharacterEventKind::CharacterArchived(_) => {
+                self.archived = true;
             }
         }
         self.version += 1;
@@ -380,6 +420,92 @@ mod tests {
                 assert_eq!(payload.amount, 250);
             }
             other => panic!("expected ExperienceGained, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_archive_produces_character_archived_event() {
+        // Arrange
+        let character_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let mut character = Character::new(character_id);
+
+        // Act
+        let result = character.archive(correlation_id, &clock);
+
+        // Assert
+        assert!(result.is_ok());
+
+        let events = character.uncommitted_events();
+        assert_eq!(events.len(), 1);
+
+        let event = &events[0];
+        assert_eq!(event.event_type(), "character.character_archived");
+
+        let meta = event.metadata();
+        assert_eq!(meta.aggregate_id, character_id);
+        assert_eq!(meta.sequence_number, 1);
+        assert_eq!(meta.correlation_id, correlation_id);
+        assert_eq!(meta.causation_id, correlation_id);
+        assert_eq!(meta.occurred_at, fixed_now);
+
+        match &event.kind {
+            CharacterEventKind::CharacterArchived(payload) => {
+                assert_eq!(payload.character_id, character_id);
+            }
+            other => panic!("expected CharacterArchived, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_apply_character_archived_sets_flag() {
+        // Arrange
+        let character_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let mut character = Character::new(character_id);
+        let event = CharacterEvent {
+            metadata: EventMetadata {
+                event_id: Uuid::new_v4(),
+                event_type: "character.character_archived".to_owned(),
+                aggregate_id: character_id,
+                sequence_number: 1,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+            kind: CharacterEventKind::CharacterArchived(CharacterArchived { character_id }),
+        };
+
+        // Act
+        character.apply(&event);
+
+        // Assert
+        assert!(character.archived);
+        assert_eq!(character.version, 1);
+    }
+
+    #[test]
+    fn test_archive_already_archived_returns_error() {
+        // Arrange
+        let character_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let mut character = Character::new(character_id);
+        character.archived = true;
+
+        // Act
+        let result = character.archive(correlation_id, &clock);
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::Validation(msg) => {
+                assert_eq!(msg, "character is already archived");
+            }
+            other => panic!("expected Validation, got {other:?}"),
         }
     }
 }

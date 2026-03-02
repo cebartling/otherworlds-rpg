@@ -65,3 +65,22 @@ impl Command for EquipItem {
         self.correlation_id
     }
 }
+
+/// Command to archive (soft-delete) an inventory.
+#[derive(Debug, Clone)]
+pub struct ArchiveInventory {
+    /// The correlation ID for tracing.
+    pub correlation_id: Uuid,
+    /// The inventory identifier.
+    pub inventory_id: Uuid,
+}
+
+impl Command for ArchiveInventory {
+    fn command_type(&self) -> &'static str {
+        "inventory.archive_inventory"
+    }
+
+    fn correlation_id(&self) -> Uuid {
+        self.correlation_id
+    }
+}

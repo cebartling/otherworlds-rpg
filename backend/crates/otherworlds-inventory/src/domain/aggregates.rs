@@ -9,8 +9,9 @@ use otherworlds_core::event::EventMetadata;
 use uuid::Uuid;
 
 use super::events::{
-    ITEM_ADDED_EVENT_TYPE, ITEM_EQUIPPED_EVENT_TYPE, ITEM_REMOVED_EVENT_TYPE, InventoryEvent,
-    InventoryEventKind, ItemAdded, ItemEquipped, ItemRemoved,
+    INVENTORY_ARCHIVED_EVENT_TYPE, ITEM_ADDED_EVENT_TYPE, ITEM_EQUIPPED_EVENT_TYPE,
+    ITEM_REMOVED_EVENT_TYPE, InventoryArchived, InventoryEvent, InventoryEventKind, ItemAdded,
+    ItemEquipped, ItemRemoved,
 };
 
 /// The aggregate root for an inventory.
@@ -22,6 +23,8 @@ pub struct Inventory {
     pub(crate) version: i64,
     /// Items currently in the inventory.
     pub(crate) items: HashSet<Uuid>,
+    /// Whether this inventory has been archived (soft-deleted).
+    pub(crate) archived: bool,
     /// Uncommitted events pending persistence.
     uncommitted_events: Vec<InventoryEvent>,
 }
@@ -34,6 +37,7 @@ impl Inventory {
             id,
             version: 0,
             items: HashSet::new(),
+            archived: false,
             uncommitted_events: Vec::new(),
         }
     }
@@ -161,6 +165,38 @@ impl Inventory {
         self.uncommitted_events.push(event);
         Ok(())
     }
+
+    /// Archives (soft-deletes) the inventory, producing an `InventoryArchived` event.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DomainError::Validation` if the inventory is already archived.
+    pub fn archive(&mut self, correlation_id: Uuid, clock: &dyn Clock) -> Result<(), DomainError> {
+        if self.archived {
+            return Err(DomainError::Validation(
+                "inventory is already archived".into(),
+            ));
+        }
+        // TODO: event_id uses Uuid::new_v4() which breaks replay determinism.
+        // See TODO on `add_item()` for details.
+        let event = InventoryEvent {
+            metadata: EventMetadata {
+                event_id: Uuid::new_v4(),
+                event_type: INVENTORY_ARCHIVED_EVENT_TYPE.to_owned(),
+                aggregate_id: self.id,
+                sequence_number: self.next_sequence_number(),
+                correlation_id,
+                causation_id: correlation_id,
+                occurred_at: clock.now(),
+            },
+            kind: InventoryEventKind::InventoryArchived(InventoryArchived {
+                inventory_id: self.id,
+            }),
+        };
+
+        self.uncommitted_events.push(event);
+        Ok(())
+    }
 }
 
 impl AggregateRoot for Inventory {
@@ -183,6 +219,9 @@ impl AggregateRoot for Inventory {
                 self.items.remove(&payload.item_id);
             }
             InventoryEventKind::ItemEquipped(_) => {}
+            InventoryEventKind::InventoryArchived(_) => {
+                self.archived = true;
+            }
         }
         self.version += 1;
     }
@@ -404,5 +443,97 @@ mod tests {
             }
             other => panic!("expected Validation, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_archive_produces_inventory_archived_event() {
+        // Arrange
+        let inventory_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let mut inventory = Inventory::new(inventory_id);
+
+        // Act
+        inventory.archive(correlation_id, &clock).unwrap();
+
+        // Assert
+        let events = inventory.uncommitted_events();
+        assert_eq!(events.len(), 1);
+
+        let event = &events[0];
+        assert_eq!(event.event_type(), INVENTORY_ARCHIVED_EVENT_TYPE);
+
+        let meta = event.metadata();
+        assert_eq!(meta.aggregate_id, inventory_id);
+        assert_eq!(meta.sequence_number, 1);
+        assert_eq!(meta.correlation_id, correlation_id);
+        assert_eq!(meta.causation_id, correlation_id);
+        assert_eq!(meta.occurred_at, fixed_now);
+
+        match &event.kind {
+            InventoryEventKind::InventoryArchived(payload) => {
+                assert_eq!(payload.inventory_id, inventory_id);
+            }
+            other => panic!("expected InventoryArchived, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_archive_returns_error_when_already_archived() {
+        // Arrange
+        let inventory_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let mut inventory = Inventory::new(inventory_id);
+
+        // Archive once.
+        inventory.archive(Uuid::new_v4(), &clock).unwrap();
+        for event in inventory.uncommitted_events().to_vec() {
+            inventory.apply(&event);
+        }
+        inventory.clear_uncommitted_events();
+
+        // Act — try to archive again.
+        let result = inventory.archive(correlation_id, &clock);
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::Validation(msg) => {
+                assert_eq!(msg, "inventory is already archived");
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_apply_inventory_archived_sets_archived_flag() {
+        // Arrange
+        let inventory_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let mut inventory = Inventory::new(inventory_id);
+        assert!(!inventory.archived);
+
+        let event = InventoryEvent {
+            metadata: EventMetadata {
+                event_id: Uuid::new_v4(),
+                event_type: INVENTORY_ARCHIVED_EVENT_TYPE.to_owned(),
+                aggregate_id: inventory_id,
+                sequence_number: 1,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+            kind: InventoryEventKind::InventoryArchived(InventoryArchived { inventory_id }),
+        };
+
+        // Act
+        inventory.apply(&event);
+
+        // Assert
+        assert!(inventory.archived);
+        assert_eq!(inventory.version, 1);
     }
 }

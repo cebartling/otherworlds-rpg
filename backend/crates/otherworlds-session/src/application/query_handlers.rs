@@ -32,6 +32,7 @@ const EVENT_TYPES: &[&str] = &[
     "session.campaign_run_started",
     "session.checkpoint_created",
     "session.timeline_branched",
+    "session.campaign_run_archived",
 ];
 
 /// Summary view for listing campaign runs.
@@ -63,6 +64,9 @@ pub async fn list_campaign_runs(
             continue;
         }
         let run = command_handlers::reconstitute(id, &stored_events)?;
+        if run.archived {
+            continue;
+        }
         summaries.push(CampaignRunSummary {
             run_id: id,
             campaign_id: run.campaign_id,
@@ -104,7 +108,7 @@ mod tests {
     use uuid::Uuid;
 
     use crate::application::query_handlers::{get_campaign_run_by_id, list_campaign_runs};
-    use crate::domain::events::{CampaignRunStarted, SessionEventKind};
+    use crate::domain::events::{CampaignRunArchived, CampaignRunStarted, SessionEventKind};
     use otherworlds_test_support::{EmptyEventRepository, RecordingEventRepository};
 
     #[tokio::test]
@@ -199,5 +203,49 @@ mod tests {
         assert_eq!(result[0].campaign_id, Some(campaign_id));
         assert_eq!(result[0].checkpoint_count, 0);
         assert_eq!(result[0].version, 1);
+    }
+
+    #[tokio::test]
+    async fn test_list_campaign_runs_excludes_archived() {
+        let run_id = Uuid::new_v4();
+        let campaign_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+
+        let events = vec![
+            StoredEvent {
+                event_id: Uuid::new_v4(),
+                aggregate_id: run_id,
+                event_type: "session.campaign_run_started".to_owned(),
+                payload: serde_json::to_value(SessionEventKind::CampaignRunStarted(
+                    CampaignRunStarted {
+                        run_id,
+                        campaign_id,
+                    },
+                ))
+                .unwrap(),
+                sequence_number: 1,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+            StoredEvent {
+                event_id: Uuid::new_v4(),
+                aggregate_id: run_id,
+                event_type: "session.campaign_run_archived".to_owned(),
+                payload: serde_json::to_value(SessionEventKind::CampaignRunArchived(
+                    CampaignRunArchived { run_id },
+                ))
+                .unwrap(),
+                sequence_number: 2,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+        ];
+        let repo = RecordingEventRepository::with_aggregate_ids(Ok(events), vec![run_id]);
+
+        let result = list_campaign_runs(&repo).await.unwrap();
+
+        assert!(result.is_empty());
     }
 }

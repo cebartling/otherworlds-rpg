@@ -11,7 +11,7 @@ use otherworlds_core::repository::{EventRepository, StoredEvent};
 use uuid::Uuid;
 
 use crate::domain::aggregates::NarrativeSession;
-use crate::domain::commands::{AdvanceBeat, PresentChoice};
+use crate::domain::commands::{AdvanceBeat, ArchiveSession, PresentChoice};
 use crate::domain::events::{NarrativeEvent, NarrativeEventKind};
 
 fn to_stored_event(event: &NarrativeEvent) -> StoredEvent {
@@ -74,6 +74,10 @@ pub async fn handle_advance_beat(
     let existing_events = repo.load_events(command.session_id).await?;
     let mut session = reconstitute(command.session_id, &existing_events)?;
 
+    if session.archived {
+        return Err(DomainError::Validation("session is archived".into()));
+    }
+
     session.advance_beat(command.correlation_id, clock);
 
     let stored_events: Vec<StoredEvent> = session
@@ -102,7 +106,44 @@ pub async fn handle_present_choice(
     let existing_events = repo.load_events(command.session_id).await?;
     let mut session = reconstitute(command.session_id, &existing_events)?;
 
+    if session.archived {
+        return Err(DomainError::Validation("session is archived".into()));
+    }
+
     session.present_choice(command.correlation_id, clock);
+
+    let stored_events: Vec<StoredEvent> = session
+        .uncommitted_events()
+        .iter()
+        .map(to_stored_event)
+        .collect();
+
+    repo.append_events(command.session_id, session.version, &stored_events)
+        .await?;
+
+    Ok(stored_events)
+}
+
+/// Handles the `ArchiveSession` command: reconstitutes the aggregate,
+/// archives it (soft-delete), and persists the resulting events.
+///
+/// # Errors
+///
+/// Returns `DomainError::AggregateNotFound` if no events exist for the session.
+/// Returns `DomainError::Validation` if the session is already archived.
+/// Returns `DomainError` if event appending fails.
+pub async fn handle_archive_session(
+    command: &ArchiveSession,
+    clock: &dyn Clock,
+    repo: &dyn EventRepository,
+) -> Result<Vec<StoredEvent>, DomainError> {
+    let existing_events = repo.load_events(command.session_id).await?;
+    if existing_events.is_empty() {
+        return Err(DomainError::AggregateNotFound(command.session_id));
+    }
+    let mut session = reconstitute(command.session_id, &existing_events)?;
+
+    session.archive(command.correlation_id, clock)?;
 
     let stored_events: Vec<StoredEvent> = session
         .uncommitted_events()
@@ -121,9 +162,32 @@ mod tests {
     use chrono::{TimeZone, Utc};
     use uuid::Uuid;
 
-    use crate::application::command_handlers::{handle_advance_beat, handle_present_choice};
-    use crate::domain::commands::{AdvanceBeat, PresentChoice};
+    use otherworlds_core::error::DomainError;
+    use otherworlds_core::repository::StoredEvent;
+
+    use crate::application::command_handlers::{
+        handle_advance_beat, handle_archive_session, handle_present_choice,
+    };
+    use crate::domain::commands::{AdvanceBeat, ArchiveSession, PresentChoice};
+    use crate::domain::events::{BeatAdvanced, NarrativeEventKind};
     use otherworlds_test_support::{FixedClock, RecordingEventRepository};
+
+    fn beat_advanced_event(session_id: Uuid, fixed_now: chrono::DateTime<Utc>) -> StoredEvent {
+        StoredEvent {
+            event_id: Uuid::new_v4(),
+            aggregate_id: session_id,
+            event_type: "narrative.beat_advanced".to_owned(),
+            payload: serde_json::to_value(NarrativeEventKind::BeatAdvanced(BeatAdvanced {
+                session_id,
+                beat_id: Uuid::new_v4(),
+            }))
+            .unwrap(),
+            sequence_number: 1,
+            correlation_id: Uuid::new_v4(),
+            causation_id: Uuid::new_v4(),
+            occurred_at: fixed_now,
+        }
+    }
 
     #[tokio::test]
     async fn test_handle_advance_beat_persists_beat_advanced_event() {
@@ -197,5 +261,189 @@ mod tests {
         assert_eq!(stored.correlation_id, correlation_id);
         assert_eq!(stored.causation_id, correlation_id);
         assert_eq!(stored.occurred_at, fixed_now);
+    }
+
+    #[tokio::test]
+    async fn test_handle_archive_session_persists_session_archived_event() {
+        // Arrange
+        let session_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let existing = vec![beat_advanced_event(session_id, fixed_now)];
+        let repo = RecordingEventRepository::new(Ok(existing));
+
+        let command = ArchiveSession {
+            correlation_id,
+            session_id,
+        };
+
+        // Act
+        let result = handle_archive_session(&command, &clock, &repo).await;
+
+        // Assert
+        assert!(result.is_ok());
+
+        let appended = repo.appended_events();
+        assert_eq!(appended.len(), 1);
+
+        let (agg_id, expected_version, events) = &appended[0];
+        assert_eq!(*agg_id, session_id);
+        assert_eq!(*expected_version, 1);
+        assert_eq!(events.len(), 1);
+
+        let stored = &events[0];
+        assert_eq!(stored.event_type, "narrative.session_archived");
+        assert_eq!(stored.aggregate_id, session_id);
+        assert_eq!(stored.sequence_number, 2);
+        assert_eq!(stored.correlation_id, correlation_id);
+        assert_eq!(stored.causation_id, correlation_id);
+        assert_eq!(stored.occurred_at, fixed_now);
+    }
+
+    #[tokio::test]
+    async fn test_handle_archive_session_rejects_not_found() {
+        // Arrange
+        let clock = FixedClock(Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap());
+        let repo = RecordingEventRepository::new(Ok(Vec::new()));
+        let session_id = Uuid::new_v4();
+
+        let command = ArchiveSession {
+            correlation_id: Uuid::new_v4(),
+            session_id,
+        };
+
+        // Act
+        let result = handle_archive_session(&command, &clock, &repo).await;
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::AggregateNotFound(id) => assert_eq!(id, session_id),
+            other => panic!("expected AggregateNotFound, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_archive_session_rejects_already_archived() {
+        // Arrange
+        let session_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+
+        let archived_event = StoredEvent {
+            event_id: Uuid::new_v4(),
+            aggregate_id: session_id,
+            event_type: "narrative.session_archived".to_owned(),
+            payload: serde_json::to_value(NarrativeEventKind::SessionArchived(
+                crate::domain::events::SessionArchived { session_id },
+            ))
+            .unwrap(),
+            sequence_number: 2,
+            correlation_id: Uuid::new_v4(),
+            causation_id: Uuid::new_v4(),
+            occurred_at: fixed_now,
+        };
+        let existing = vec![beat_advanced_event(session_id, fixed_now), archived_event];
+        let repo = RecordingEventRepository::new(Ok(existing));
+
+        let command = ArchiveSession {
+            correlation_id: Uuid::new_v4(),
+            session_id,
+        };
+
+        // Act
+        let result = handle_archive_session(&command, &clock, &repo).await;
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::Validation(msg) => {
+                assert_eq!(msg, "session is already archived");
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_advance_beat_rejects_archived_session() {
+        // Arrange
+        let session_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+
+        let archived_event = StoredEvent {
+            event_id: Uuid::new_v4(),
+            aggregate_id: session_id,
+            event_type: "narrative.session_archived".to_owned(),
+            payload: serde_json::to_value(NarrativeEventKind::SessionArchived(
+                crate::domain::events::SessionArchived { session_id },
+            ))
+            .unwrap(),
+            sequence_number: 2,
+            correlation_id: Uuid::new_v4(),
+            causation_id: Uuid::new_v4(),
+            occurred_at: fixed_now,
+        };
+        let existing = vec![beat_advanced_event(session_id, fixed_now), archived_event];
+        let repo = RecordingEventRepository::new(Ok(existing));
+
+        let command = AdvanceBeat {
+            correlation_id: Uuid::new_v4(),
+            session_id,
+        };
+
+        // Act
+        let result = handle_advance_beat(&command, &clock, &repo).await;
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::Validation(msg) => {
+                assert_eq!(msg, "session is archived");
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_present_choice_rejects_archived_session() {
+        // Arrange
+        let session_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+
+        let archived_event = StoredEvent {
+            event_id: Uuid::new_v4(),
+            aggregate_id: session_id,
+            event_type: "narrative.session_archived".to_owned(),
+            payload: serde_json::to_value(NarrativeEventKind::SessionArchived(
+                crate::domain::events::SessionArchived { session_id },
+            ))
+            .unwrap(),
+            sequence_number: 2,
+            correlation_id: Uuid::new_v4(),
+            causation_id: Uuid::new_v4(),
+            occurred_at: fixed_now,
+        };
+        let existing = vec![beat_advanced_event(session_id, fixed_now), archived_event];
+        let repo = RecordingEventRepository::new(Ok(existing));
+
+        let command = PresentChoice {
+            correlation_id: Uuid::new_v4(),
+            session_id,
+        };
+
+        // Act
+        let result = handle_present_choice(&command, &clock, &repo).await;
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::Validation(msg) => {
+                assert_eq!(msg, "session is archived");
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
     }
 }

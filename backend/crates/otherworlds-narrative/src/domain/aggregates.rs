@@ -2,10 +2,13 @@
 
 use otherworlds_core::aggregate::AggregateRoot;
 use otherworlds_core::clock::Clock;
+use otherworlds_core::error::DomainError;
 use otherworlds_core::event::EventMetadata;
 use uuid::Uuid;
 
-use super::events::{BeatAdvanced, ChoicePresented, NarrativeEvent, NarrativeEventKind};
+use super::events::{
+    BeatAdvanced, ChoicePresented, NarrativeEvent, NarrativeEventKind, SessionArchived,
+};
 
 /// The aggregate root for a narrative session.
 #[derive(Debug)]
@@ -18,6 +21,8 @@ pub struct NarrativeSession {
     pub(crate) current_beat_id: Option<Uuid>,
     /// All choice IDs presented in this session.
     pub(crate) choice_ids: Vec<Uuid>,
+    /// Whether this session has been archived (soft-deleted).
+    pub(crate) archived: bool,
     /// Uncommitted events pending persistence.
     uncommitted_events: Vec<NarrativeEvent>,
 }
@@ -31,6 +36,7 @@ impl NarrativeSession {
             version: 0,
             current_beat_id: None,
             choice_ids: Vec::new(),
+            archived: false,
             uncommitted_events: Vec::new(),
         }
     }
@@ -87,6 +93,37 @@ impl NarrativeSession {
 
         self.uncommitted_events.push(event);
     }
+
+    /// Archives (soft-deletes) a session, producing a `SessionArchived` event.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DomainError::Validation` if the session is already archived.
+    pub fn archive(&mut self, correlation_id: Uuid, clock: &dyn Clock) -> Result<(), DomainError> {
+        if self.archived {
+            return Err(DomainError::Validation(
+                "session is already archived".into(),
+            ));
+        }
+
+        let event = NarrativeEvent {
+            metadata: EventMetadata {
+                event_id: Uuid::new_v4(),
+                event_type: "narrative.session_archived".to_owned(),
+                aggregate_id: self.id,
+                sequence_number: self.next_sequence_number(),
+                correlation_id,
+                causation_id: correlation_id,
+                occurred_at: clock.now(),
+            },
+            kind: NarrativeEventKind::SessionArchived(SessionArchived {
+                session_id: self.id,
+            }),
+        };
+
+        self.uncommitted_events.push(event);
+        Ok(())
+    }
 }
 
 impl AggregateRoot for NarrativeSession {
@@ -109,6 +146,9 @@ impl AggregateRoot for NarrativeSession {
                 self.choice_ids.push(payload.choice_id);
             }
             NarrativeEventKind::SceneStarted(_) => {}
+            NarrativeEventKind::SessionArchived(_) => {
+                self.archived = true;
+            }
         }
         self.version += 1;
     }
@@ -257,6 +297,92 @@ mod tests {
                 assert_eq!(payload.session_id, session_id);
             }
             other => panic!("expected ChoicePresented, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_archive_produces_session_archived_event() {
+        // Arrange
+        let session_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let mut session = NarrativeSession::new(session_id);
+
+        // Act
+        let result = session.archive(correlation_id, &clock);
+
+        // Assert
+        assert!(result.is_ok());
+
+        let events = session.uncommitted_events();
+        assert_eq!(events.len(), 1);
+
+        let event = &events[0];
+        assert_eq!(event.event_type(), "narrative.session_archived");
+
+        let meta = event.metadata();
+        assert_eq!(meta.aggregate_id, session_id);
+        assert_eq!(meta.sequence_number, 1);
+        assert_eq!(meta.correlation_id, correlation_id);
+        assert_eq!(meta.causation_id, correlation_id);
+        assert_eq!(meta.occurred_at, fixed_now);
+
+        match &event.kind {
+            NarrativeEventKind::SessionArchived(payload) => {
+                assert_eq!(payload.session_id, session_id);
+            }
+            other => panic!("expected SessionArchived, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_apply_session_archived_sets_flag() {
+        // Arrange
+        let session_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let mut session = NarrativeSession::new(session_id);
+        let event = NarrativeEvent {
+            metadata: EventMetadata {
+                event_id: Uuid::new_v4(),
+                event_type: "narrative.session_archived".to_owned(),
+                aggregate_id: session_id,
+                sequence_number: 1,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+            kind: NarrativeEventKind::SessionArchived(SessionArchived { session_id }),
+        };
+
+        // Act
+        session.apply(&event);
+
+        // Assert
+        assert!(session.archived);
+        assert_eq!(session.version, 1);
+    }
+
+    #[test]
+    fn test_archive_already_archived_returns_error() {
+        // Arrange
+        let session_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let mut session = NarrativeSession::new(session_id);
+        session.archived = true;
+
+        // Act
+        let result = session.archive(correlation_id, &clock);
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::Validation(msg) => {
+                assert_eq!(msg, "session is already archived");
+            }
+            other => panic!("expected Validation, got {other:?}"),
         }
     }
 }

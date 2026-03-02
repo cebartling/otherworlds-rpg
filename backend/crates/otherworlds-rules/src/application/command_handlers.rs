@@ -14,7 +14,9 @@ use otherworlds_core::rng::DeterministicRng;
 use uuid::Uuid;
 
 use crate::domain::aggregates::{DeclareIntentParams, Resolution};
-use crate::domain::commands::{DeclareIntent, EffectSpec, ProduceEffects, ResolveCheck};
+use crate::domain::commands::{
+    ArchiveResolution, DeclareIntent, EffectSpec, ProduceEffects, ResolveCheck,
+};
 use crate::domain::events::{RulesEvent, RulesEventKind};
 
 fn to_stored_event(event: &RulesEvent) -> StoredEvent {
@@ -76,6 +78,10 @@ pub async fn handle_declare_intent(
     let existing_events = repo.load_events(command.resolution_id).await?;
     let mut resolution = reconstitute(command.resolution_id, &existing_events)?;
 
+    if resolution.archived {
+        return Err(DomainError::Validation("resolution is archived".into()));
+    }
+
     resolution.declare_intent(
         DeclareIntentParams {
             intent_id: command.intent_id,
@@ -119,6 +125,10 @@ pub async fn handle_resolve_check(
     let existing_events = repo.load_events(command.resolution_id).await?;
     let mut resolution = reconstitute(command.resolution_id, &existing_events)?;
 
+    if resolution.archived {
+        return Err(DomainError::Validation("resolution is archived".into()));
+    }
+
     // Lock RNG only for the synchronous domain method — never across an await.
     {
         let mut rng_guard = rng
@@ -153,6 +163,10 @@ pub async fn handle_produce_effects(
     let existing_events = repo.load_events(command.resolution_id).await?;
     let mut resolution = reconstitute(command.resolution_id, &existing_events)?;
 
+    if resolution.archived {
+        return Err(DomainError::Validation("resolution is archived".into()));
+    }
+
     let effects = command
         .effects
         .iter()
@@ -174,20 +188,61 @@ pub async fn handle_produce_effects(
     Ok(stored_events)
 }
 
+/// Handles the `ArchiveResolution` command: loads events, checks for existence,
+/// reconstitutes the aggregate, archives it, and persists the resulting event.
+///
+/// # Errors
+///
+/// Returns `DomainError::AggregateNotFound` if no events exist for the resolution.
+/// Returns `DomainError::Validation` if the resolution is already archived.
+/// Returns `DomainError` if event loading or appending fails.
+pub async fn handle_archive_resolution(
+    command: &ArchiveResolution,
+    clock: &dyn Clock,
+    repo: &dyn EventRepository,
+) -> Result<Vec<StoredEvent>, DomainError> {
+    let existing_events = repo.load_events(command.resolution_id).await?;
+    if existing_events.is_empty() {
+        return Err(DomainError::AggregateNotFound(command.resolution_id));
+    }
+    let mut resolution = reconstitute(command.resolution_id, &existing_events)?;
+
+    resolution.archive(command.correlation_id, clock)?;
+
+    let stored_events: Vec<StoredEvent> = resolution
+        .uncommitted_events()
+        .iter()
+        .map(to_stored_event)
+        .collect();
+
+    repo.append_events(command.resolution_id, resolution.version, &stored_events)
+        .await?;
+
+    Ok(stored_events)
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::{TimeZone, Utc};
+    use otherworlds_core::error::DomainError;
     use otherworlds_core::repository::StoredEvent;
     use otherworlds_core::rng::DeterministicRng;
     use std::sync::Mutex;
     use uuid::Uuid;
 
     use crate::application::command_handlers::{
-        handle_declare_intent, handle_produce_effects, handle_resolve_check, reconstitute,
+        handle_archive_resolution, handle_declare_intent, handle_produce_effects,
+        handle_resolve_check, reconstitute,
     };
-    use crate::domain::commands::{DeclareIntent, EffectSpec, ProduceEffects, ResolveCheck};
-    use crate::domain::events::{CheckOutcome, CheckResolved, IntentDeclared, RulesEventKind};
-    use otherworlds_test_support::{FixedClock, RecordingEventRepository, SequenceRng};
+    use crate::domain::commands::{
+        ArchiveResolution, DeclareIntent, EffectSpec, ProduceEffects, ResolveCheck,
+    };
+    use crate::domain::events::{
+        CheckOutcome, CheckResolved, IntentDeclared, ResolutionArchived, RulesEventKind,
+    };
+    use otherworlds_test_support::{
+        EmptyEventRepository, FixedClock, RecordingEventRepository, SequenceRng,
+    };
 
     fn fixed_clock() -> FixedClock {
         FixedClock(Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap())
@@ -576,5 +631,203 @@ mod tests {
         assert_eq!(resolution.effects.len(), 1);
         assert_eq!(resolution.effects[0].effect_type, "damage");
         assert_eq!(resolution.effects[0].payload["amount"], 8);
+    }
+
+    // --- archive handler tests ---
+
+    fn intent_declared_event(resolution_id: Uuid, fixed_now: chrono::DateTime<Utc>) -> StoredEvent {
+        StoredEvent {
+            event_id: Uuid::new_v4(),
+            aggregate_id: resolution_id,
+            event_type: "rules.intent_declared".to_owned(),
+            payload: serde_json::to_value(RulesEventKind::IntentDeclared(IntentDeclared {
+                resolution_id,
+                intent_id: Uuid::new_v4(),
+                action_type: "skill_check".to_owned(),
+                skill: Some("perception".to_owned()),
+                target_id: None,
+                difficulty_class: 15,
+                modifier: 3,
+            }))
+            .unwrap(),
+            sequence_number: 1,
+            correlation_id: Uuid::new_v4(),
+            causation_id: Uuid::new_v4(),
+            occurred_at: fixed_now,
+        }
+    }
+
+    fn resolution_archived_event(
+        resolution_id: Uuid,
+        fixed_now: chrono::DateTime<Utc>,
+    ) -> StoredEvent {
+        StoredEvent {
+            event_id: Uuid::new_v4(),
+            aggregate_id: resolution_id,
+            event_type: "rules.resolution_archived".to_owned(),
+            payload: serde_json::to_value(RulesEventKind::ResolutionArchived(ResolutionArchived {
+                resolution_id,
+            }))
+            .unwrap(),
+            sequence_number: 2,
+            correlation_id: Uuid::new_v4(),
+            causation_id: Uuid::new_v4(),
+            occurred_at: fixed_now,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_archive_resolution_persists_resolution_archived_event() {
+        let resolution_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = fixed_clock();
+        let repo = RecordingEventRepository::new(Ok(vec![intent_declared_event(
+            resolution_id,
+            fixed_now,
+        )]));
+
+        let command = ArchiveResolution {
+            correlation_id,
+            resolution_id,
+        };
+
+        let result = handle_archive_resolution(&command, &clock, &repo).await;
+        assert!(result.is_ok());
+
+        let appended = repo.appended_events();
+        assert_eq!(appended.len(), 1);
+
+        let (agg_id, expected_version, events) = &appended[0];
+        assert_eq!(*agg_id, resolution_id);
+        assert_eq!(*expected_version, 1);
+        assert_eq!(events.len(), 1);
+
+        let stored = &events[0];
+        assert_eq!(stored.event_type, "rules.resolution_archived");
+        assert_eq!(stored.aggregate_id, resolution_id);
+        assert_eq!(stored.correlation_id, correlation_id);
+    }
+
+    #[tokio::test]
+    async fn test_handle_archive_resolution_rejects_not_found() {
+        let repo = EmptyEventRepository;
+
+        let command = ArchiveResolution {
+            correlation_id: Uuid::new_v4(),
+            resolution_id: Uuid::new_v4(),
+        };
+
+        let result = handle_archive_resolution(&command, &fixed_clock(), &repo).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::AggregateNotFound(_) => {}
+            other => panic!("expected AggregateNotFound, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_archive_resolution_rejects_already_archived() {
+        let resolution_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let repo = RecordingEventRepository::new(Ok(vec![
+            intent_declared_event(resolution_id, fixed_now),
+            resolution_archived_event(resolution_id, fixed_now),
+        ]));
+
+        let command = ArchiveResolution {
+            correlation_id: Uuid::new_v4(),
+            resolution_id,
+        };
+
+        let result = handle_archive_resolution(&command, &fixed_clock(), &repo).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::Validation(msg) => {
+                assert_eq!(msg, "resolution is already archived");
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_declare_intent_rejects_archived_resolution() {
+        let resolution_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let repo = RecordingEventRepository::new(Ok(vec![
+            intent_declared_event(resolution_id, fixed_now),
+            resolution_archived_event(resolution_id, fixed_now),
+        ]));
+
+        let command = DeclareIntent {
+            correlation_id: Uuid::new_v4(),
+            resolution_id,
+            intent_id: Uuid::new_v4(),
+            action_type: "skill_check".to_owned(),
+            skill: None,
+            target_id: None,
+            difficulty_class: 15,
+            modifier: 0,
+        };
+
+        let result = handle_declare_intent(&command, &fixed_clock(), &repo).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::Validation(msg) => {
+                assert_eq!(msg, "resolution is archived");
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_resolve_check_rejects_archived_resolution() {
+        let resolution_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let repo = RecordingEventRepository::new(Ok(vec![
+            intent_declared_event(resolution_id, fixed_now),
+            resolution_archived_event(resolution_id, fixed_now),
+        ]));
+        let rng: Mutex<SequenceRng> = Mutex::new(SequenceRng::new(vec![15, 42, 99, 7, 13]));
+        let rng_ref: &Mutex<dyn DeterministicRng + Send> = &rng;
+
+        let command = ResolveCheck {
+            correlation_id: Uuid::new_v4(),
+            resolution_id,
+        };
+
+        let result = handle_resolve_check(&command, &fixed_clock(), rng_ref, &repo).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::Validation(msg) => {
+                assert_eq!(msg, "resolution is archived");
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_produce_effects_rejects_archived_resolution() {
+        let resolution_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let repo = RecordingEventRepository::new(Ok(vec![
+            intent_declared_event(resolution_id, fixed_now),
+            resolution_archived_event(resolution_id, fixed_now),
+        ]));
+
+        let command = ProduceEffects {
+            correlation_id: Uuid::new_v4(),
+            resolution_id,
+            effects: vec![],
+        };
+
+        let result = handle_produce_effects(&command, &fixed_clock(), &repo).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::Validation(msg) => {
+                assert_eq!(msg, "resolution is archived");
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
     }
 }
