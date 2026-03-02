@@ -280,6 +280,7 @@ mod tests {
             payload: serde_json::to_value(ContentEventKind::CampaignIngested(CampaignIngested {
                 campaign_id: aggregate_id,
                 version_hash: "abc123".to_owned(),
+                source: "# My Campaign".to_owned(),
             }))
             .unwrap(),
             sequence_number: 1,

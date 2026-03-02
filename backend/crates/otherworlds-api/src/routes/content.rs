@@ -235,6 +235,7 @@ mod tests {
                         CampaignIngested {
                             campaign_id: aggregate_id,
                             version_hash: KNOWN_VERSION_HASH.to_owned(),
+                            source: "# Test Campaign".to_owned(),
                         },
                     ))
                     .expect("CampaignIngested serialization is infallible"),
@@ -295,6 +296,7 @@ mod tests {
                     CampaignIngested {
                         campaign_id: aggregate_id,
                         version_hash: KNOWN_VERSION_HASH.to_owned(),
+                        source: "# Test Campaign".to_owned(),
                     },
                 ))
                 .expect("CampaignIngested serialization is infallible"),
@@ -340,6 +342,7 @@ mod tests {
                         CampaignIngested {
                             campaign_id: aggregate_id,
                             version_hash: KNOWN_VERSION_HASH.to_owned(),
+                            source: "# Test Campaign".to_owned(),
                         },
                     ))
                     .expect("CampaignIngested serialization is infallible"),

@@ -11,6 +11,8 @@ pub struct CampaignIngested {
     pub campaign_id: Uuid,
     /// The campaign version hash.
     pub version_hash: String,
+    /// The raw source content that was ingested.
+    pub source: String,
 }
 
 /// Emitted when a campaign passes validation.

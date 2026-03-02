@@ -17,6 +17,7 @@ use super::events::{
 
 /// The aggregate root for a campaign.
 #[derive(Debug)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct Campaign {
     /// Aggregate identifier.
     pub id: Uuid,
@@ -26,10 +27,14 @@ pub struct Campaign {
     pub(crate) ingested: bool,
     /// Whether the campaign has been validated.
     pub(crate) validated: bool,
+    /// Whether the campaign has been compiled into runtime format.
+    pub(crate) compiled: bool,
     /// Whether the campaign has been archived (soft-deleted).
     pub(crate) archived: bool,
     /// The campaign version hash (set on ingestion).
     pub(crate) version_hash: Option<String>,
+    /// The raw source content (set on ingestion).
+    pub(crate) source: Option<String>,
     /// Uncommitted events pending persistence.
     uncommitted_events: Vec<ContentEvent>,
 }
@@ -43,8 +48,10 @@ impl Campaign {
             version: 0,
             ingested: false,
             validated: false,
+            compiled: false,
             archived: false,
             version_hash: None,
+            source: None,
             uncommitted_events: Vec::new(),
         }
     }
@@ -104,6 +111,7 @@ impl Campaign {
             kind: ContentEventKind::CampaignIngested(CampaignIngested {
                 campaign_id: self.id,
                 version_hash,
+                source: source.to_owned(),
             }),
         };
 
@@ -113,8 +121,8 @@ impl Campaign {
 
     /// Validates a campaign, producing a `CampaignValidated` event.
     ///
-    /// TODO: Add actual validation logic — schema checks, reference integrity,
-    /// required-field verification, scene graph connectivity, etc.
+    /// Deep validation logic (schema checks, reference integrity,
+    /// scene graph connectivity) is deferred to a follow-up implementation.
     ///
     /// # Errors
     ///
@@ -153,8 +161,8 @@ impl Campaign {
 
     /// Compiles a campaign into runtime format, producing a `CampaignCompiled` event.
     ///
-    /// TODO: Add actual compilation logic — transform validated campaign source
-    /// into optimized runtime format (scene graph, lookup tables, etc.).
+    /// Deep compilation logic (scene graph generation, lookup tables,
+    /// runtime optimization) is deferred to a follow-up implementation.
     ///
     /// # Errors
     ///
@@ -252,11 +260,14 @@ impl AggregateRoot for Campaign {
             ContentEventKind::CampaignIngested(payload) => {
                 self.ingested = true;
                 self.version_hash = Some(payload.version_hash.clone());
+                self.source = Some(payload.source.clone());
             }
             ContentEventKind::CampaignValidated(_) => {
                 self.validated = true;
             }
-            ContentEventKind::CampaignCompiled(_) => {}
+            ContentEventKind::CampaignCompiled(_) => {
+                self.compiled = true;
+            }
             ContentEventKind::CampaignArchived(_) => {
                 self.archived = true;
             }
@@ -313,6 +324,7 @@ mod tests {
             ContentEventKind::CampaignIngested(payload) => {
                 assert_eq!(payload.campaign_id, campaign_id);
                 assert!(!payload.version_hash.is_empty());
+                assert_eq!(payload.source, "# My Campaign");
             }
             other => panic!("expected CampaignIngested, got {other:?}"),
         }
@@ -620,5 +632,128 @@ mod tests {
             hash,
             "bf576a9cb4584e476d0195b21ef1c5ba67573544ad3870920911aefed42e4798"
         );
+    }
+
+    #[test]
+    fn test_apply_campaign_ingested_sets_source() {
+        // Arrange
+        let campaign_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let mut campaign = Campaign::new(campaign_id);
+        let event = ContentEvent {
+            metadata: EventMetadata {
+                event_id: Uuid::new_v4(),
+                event_type: CAMPAIGN_INGESTED_EVENT_TYPE.to_owned(),
+                aggregate_id: campaign_id,
+                sequence_number: 1,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+            kind: ContentEventKind::CampaignIngested(CampaignIngested {
+                campaign_id,
+                version_hash: "abc123".to_owned(),
+                source: "# My Campaign".to_owned(),
+            }),
+        };
+
+        // Act
+        campaign.apply(&event);
+
+        // Assert
+        assert_eq!(campaign.source, Some("# My Campaign".to_owned()));
+        assert!(campaign.ingested);
+        assert_eq!(campaign.version, 1);
+    }
+
+    #[test]
+    fn test_apply_campaign_compiled_sets_compiled_flag() {
+        // Arrange
+        let campaign_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let mut campaign = Campaign::new(campaign_id);
+
+        // Pre-apply ingested + validated so the aggregate is in a valid state.
+        let ingested_event = ContentEvent {
+            metadata: EventMetadata {
+                event_id: Uuid::new_v4(),
+                event_type: CAMPAIGN_INGESTED_EVENT_TYPE.to_owned(),
+                aggregate_id: campaign_id,
+                sequence_number: 1,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+            kind: ContentEventKind::CampaignIngested(CampaignIngested {
+                campaign_id,
+                version_hash: "abc123".to_owned(),
+                source: "# My Campaign".to_owned(),
+            }),
+        };
+        campaign.apply(&ingested_event);
+
+        let compiled_event = ContentEvent {
+            metadata: EventMetadata {
+                event_id: Uuid::new_v4(),
+                event_type: CAMPAIGN_COMPILED_EVENT_TYPE.to_owned(),
+                aggregate_id: campaign_id,
+                sequence_number: 3,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+            kind: ContentEventKind::CampaignCompiled(CampaignCompiled {
+                campaign_id,
+                version_hash: "abc123".to_owned(),
+            }),
+        };
+
+        // Act
+        campaign.apply(&compiled_event);
+
+        // Assert
+        assert!(campaign.compiled);
+        assert_eq!(campaign.version, 2);
+    }
+
+    #[test]
+    fn test_compile_campaign_sets_compiled_flag_after_apply() {
+        // Arrange — full lifecycle: ingest → validate → compile.
+        let campaign_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let mut campaign = Campaign::new(campaign_id);
+
+        // Ingest.
+        campaign
+            .ingest_campaign("# My Campaign", Uuid::new_v4(), &clock, &mut MockRng)
+            .unwrap();
+        for event in campaign.uncommitted_events().to_vec() {
+            campaign.apply(&event);
+        }
+        campaign.clear_uncommitted_events();
+
+        // Validate.
+        campaign
+            .validate_campaign(Uuid::new_v4(), &clock, &mut MockRng)
+            .unwrap();
+        for event in campaign.uncommitted_events().to_vec() {
+            campaign.apply(&event);
+        }
+        campaign.clear_uncommitted_events();
+
+        // Compile.
+        campaign
+            .compile_campaign(Uuid::new_v4(), &clock, &mut MockRng)
+            .unwrap();
+        for event in campaign.uncommitted_events().to_vec() {
+            campaign.apply(&event);
+        }
+        campaign.clear_uncommitted_events();
+
+        // Assert
+        assert!(campaign.compiled);
+        assert!(campaign.ingested);
+        assert!(campaign.validated);
     }
 }
