@@ -112,8 +112,7 @@ async fn test_narrative_archive_session_round_trip(pool: PgPool) {
 
     // DELETE /api/v1/narrative/{session_id}
     let app = common::build_test_app(pool.clone());
-    let (status, json) =
-        common::delete_json(app, &format!("/api/v1/narrative/{session_id}")).await;
+    let (status, json) = common::delete_json(app, &format!("/api/v1/narrative/{session_id}")).await;
     assert_eq!(status, StatusCode::OK);
     let event_ids = json["event_ids"].as_array().unwrap();
     assert_eq!(event_ids.len(), 1);
@@ -152,8 +151,7 @@ async fn test_narrative_archive_excludes_from_list(pool: PgPool) {
 
     // Archive session_a
     let app = common::build_test_app(pool.clone());
-    let (status, _) =
-        common::delete_json(app, &format!("/api/v1/narrative/{session_a}")).await;
+    let (status, _) = common::delete_json(app, &format!("/api/v1/narrative/{session_a}")).await;
     assert_eq!(status, StatusCode::OK);
 
     // GET /api/v1/narrative — session_a should NOT be in list, session_b should
@@ -189,8 +187,7 @@ async fn test_narrative_command_on_archived_returns_error(pool: PgPool) {
 
     // Archive the session
     let app = common::build_test_app(pool.clone());
-    let (status, _) =
-        common::delete_json(app, &format!("/api/v1/narrative/{session_id}")).await;
+    let (status, _) = common::delete_json(app, &format!("/api/v1/narrative/{session_id}")).await;
     assert_eq!(status, StatusCode::OK);
 
     // POST advance-beat on archived session — should fail

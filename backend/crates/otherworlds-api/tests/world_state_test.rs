@@ -121,8 +121,7 @@ async fn test_world_archive_round_trip(pool: PgPool) {
     assert_eq!(status, StatusCode::OK);
 
     let app = common::build_test_app(pool.clone());
-    let (status, json) =
-        common::delete_json(app, &format!("/api/v1/world/{world_id}")).await;
+    let (status, json) = common::delete_json(app, &format!("/api/v1/world/{world_id}")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["event_ids"].as_array().unwrap().len(), 1);
 
@@ -162,8 +161,7 @@ async fn test_world_archive_excludes_from_list(pool: PgPool) {
     assert_eq!(status, StatusCode::OK);
 
     let app = common::build_test_app(pool.clone());
-    let (status, _) =
-        common::delete_json(app, &format!("/api/v1/world/{world_a}")).await;
+    let (status, _) = common::delete_json(app, &format!("/api/v1/world/{world_a}")).await;
     assert_eq!(status, StatusCode::OK);
 
     let app = common::build_test_app(pool);
@@ -240,8 +238,7 @@ async fn test_world_command_on_archived_returns_error(pool: PgPool) {
     assert_eq!(status, StatusCode::OK);
 
     let app = common::build_test_app(pool.clone());
-    let (status, _) =
-        common::delete_json(app, &format!("/api/v1/world/{world_id}")).await;
+    let (status, _) = common::delete_json(app, &format!("/api/v1/world/{world_id}")).await;
     assert_eq!(status, StatusCode::OK);
 
     let app = common::build_test_app(pool);

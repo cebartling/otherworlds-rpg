@@ -192,8 +192,7 @@ async fn test_rules_archive_resolution_round_trip(pool: PgPool) {
 
     // Step 2: DELETE /api/v1/rules/{resolution_id}
     let app = common::build_test_app(pool.clone());
-    let (status, json) =
-        common::delete_json(app, &format!("/api/v1/rules/{resolution_id}")).await;
+    let (status, json) = common::delete_json(app, &format!("/api/v1/rules/{resolution_id}")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["event_ids"].as_array().unwrap().len(), 1);
 
@@ -245,8 +244,7 @@ async fn test_rules_archive_excludes_from_list(pool: PgPool) {
 
     // Archive resolution_a
     let app = common::build_test_app(pool.clone());
-    let (status, _) =
-        common::delete_json(app, &format!("/api/v1/rules/{resolution_id_a}")).await;
+    let (status, _) = common::delete_json(app, &format!("/api/v1/rules/{resolution_id_a}")).await;
     assert_eq!(status, StatusCode::OK);
 
     // GET /api/v1/rules — resolution_a should NOT be in list, resolution_b should be
@@ -289,8 +287,7 @@ async fn test_rules_command_on_archived_returns_error(pool: PgPool) {
 
     // Step 2: archive the resolution
     let app = common::build_test_app(pool.clone());
-    let (status, _) =
-        common::delete_json(app, &format!("/api/v1/rules/{resolution_id}")).await;
+    let (status, _) = common::delete_json(app, &format!("/api/v1/rules/{resolution_id}")).await;
     assert_eq!(status, StatusCode::OK);
 
     // Step 3: attempt resolve-check on archived resolution — should fail

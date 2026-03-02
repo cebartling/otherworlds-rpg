@@ -125,8 +125,7 @@ async fn test_content_archive_campaign_round_trip(pool: PgPool) {
     let campaign_id: Uuid = json["aggregate_id"].as_str().unwrap().parse().unwrap();
 
     let app = common::build_test_app(pool.clone());
-    let (status, json) =
-        common::delete_json(app, &format!("/api/v1/content/{campaign_id}")).await;
+    let (status, json) = common::delete_json(app, &format!("/api/v1/content/{campaign_id}")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["event_ids"].as_array().unwrap().len(), 1);
 
@@ -163,8 +162,7 @@ async fn test_content_archive_excludes_from_list(pool: PgPool) {
     let campaign_b: Uuid = json["aggregate_id"].as_str().unwrap().parse().unwrap();
 
     let app = common::build_test_app(pool.clone());
-    let (status, _json) =
-        common::delete_json(app, &format!("/api/v1/content/{campaign_a}")).await;
+    let (status, _json) = common::delete_json(app, &format!("/api/v1/content/{campaign_a}")).await;
     assert_eq!(status, StatusCode::OK);
 
     let app = common::build_test_app(pool);
@@ -236,8 +234,7 @@ async fn test_content_command_on_archived_returns_error(pool: PgPool) {
     let campaign_id: Uuid = json["aggregate_id"].as_str().unwrap().parse().unwrap();
 
     let app = common::build_test_app(pool.clone());
-    let (status, _json) =
-        common::delete_json(app, &format!("/api/v1/content/{campaign_id}")).await;
+    let (status, _json) = common::delete_json(app, &format!("/api/v1/content/{campaign_id}")).await;
     assert_eq!(status, StatusCode::OK);
 
     let app = common::build_test_app(pool);

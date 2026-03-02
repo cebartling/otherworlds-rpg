@@ -197,8 +197,7 @@ async fn test_inventory_command_on_archived_returns_error(pool: PgPool) {
 
     // Archive the inventory
     let app = common::build_test_app(pool.clone());
-    let (status, _) =
-        common::delete_json(app, &format!("/api/v1/inventory/{inventory_id}")).await;
+    let (status, _) = common::delete_json(app, &format!("/api/v1/inventory/{inventory_id}")).await;
     assert_eq!(status, StatusCode::OK);
 
     // POST add-item on archived inventory — should fail

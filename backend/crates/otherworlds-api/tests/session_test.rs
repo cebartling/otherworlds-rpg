@@ -118,8 +118,7 @@ async fn test_session_archive_campaign_run_round_trip(pool: PgPool) {
     let run_id: Uuid = json["aggregate_id"].as_str().unwrap().parse().unwrap();
 
     let app = common::build_test_app(pool.clone());
-    let (status, json) =
-        common::delete_json(app, &format!("/api/v1/sessions/{run_id}")).await;
+    let (status, json) = common::delete_json(app, &format!("/api/v1/sessions/{run_id}")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["event_ids"].as_array().unwrap().len(), 1);
 
@@ -155,8 +154,7 @@ async fn test_session_archive_excludes_from_list(pool: PgPool) {
     let run_b: Uuid = json["aggregate_id"].as_str().unwrap().parse().unwrap();
 
     let app = common::build_test_app(pool.clone());
-    let (status, _json) =
-        common::delete_json(app, &format!("/api/v1/sessions/{run_a}")).await;
+    let (status, _json) = common::delete_json(app, &format!("/api/v1/sessions/{run_a}")).await;
     assert_eq!(status, StatusCode::OK);
 
     let app = common::build_test_app(pool);
@@ -211,8 +209,7 @@ async fn test_session_branch_timeline_round_trip(pool: PgPool) {
     let branch_run_id: Uuid = json["aggregate_id"].as_str().unwrap().parse().unwrap();
 
     let app = common::build_test_app(pool);
-    let (status, json) =
-        common::get_json(app, &format!("/api/v1/sessions/{branch_run_id}")).await;
+    let (status, json) = common::get_json(app, &format!("/api/v1/sessions/{branch_run_id}")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["version"], 1);
 }
@@ -232,8 +229,7 @@ async fn test_session_command_on_archived_returns_error(pool: PgPool) {
     let run_id: Uuid = json["aggregate_id"].as_str().unwrap().parse().unwrap();
 
     let app = common::build_test_app(pool.clone());
-    let (status, _json) =
-        common::delete_json(app, &format!("/api/v1/sessions/{run_id}")).await;
+    let (status, _json) = common::delete_json(app, &format!("/api/v1/sessions/{run_id}")).await;
     assert_eq!(status, StatusCode::OK);
 
     let app = common::build_test_app(pool);
