@@ -5,5 +5,8 @@ mod repository;
 mod rng;
 
 pub use clock::FixedClock;
-pub use repository::{EmptyEventRepository, FailingEventRepository, RecordingEventRepository};
+pub use repository::{
+    ConflictingEventRepository, EmptyEventRepository, FailingEventRepository,
+    RecordingEventRepository,
+};
 pub use rng::{MockRng, SequenceRng};

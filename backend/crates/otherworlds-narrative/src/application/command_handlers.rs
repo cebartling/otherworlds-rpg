@@ -192,7 +192,9 @@ mod tests {
     use crate::domain::commands::{AdvanceBeat, ArchiveSession, PresentChoice};
     use crate::domain::events::{BeatAdvanced, NarrativeEventKind};
     use otherworlds_core::rng::DeterministicRng;
-    use otherworlds_test_support::{FixedClock, MockRng, RecordingEventRepository};
+    use otherworlds_test_support::{
+        ConflictingEventRepository, FixedClock, MockRng, RecordingEventRepository,
+    };
     use std::sync::{Arc, Mutex};
 
     fn beat_advanced_event(session_id: Uuid, fixed_now: chrono::DateTime<Utc>) -> StoredEvent {
@@ -477,6 +479,106 @@ mod tests {
                 assert_eq!(msg, "session is archived");
             }
             other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_advance_beat_propagates_concurrency_conflict() {
+        // Arrange
+        let session_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
+        let repo = ConflictingEventRepository::new(vec![], session_id, 0, 1);
+
+        let command = AdvanceBeat {
+            correlation_id: Uuid::new_v4(),
+            session_id,
+        };
+
+        // Act
+        let result = handle_advance_beat(&command, &clock, &*rng, &repo).await;
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::ConcurrencyConflict {
+                aggregate_id,
+                expected,
+                actual,
+            } => {
+                assert_eq!(aggregate_id, session_id);
+                assert_eq!(expected, 0);
+                assert_eq!(actual, 1);
+            }
+            other => panic!("expected ConcurrencyConflict, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_present_choice_propagates_concurrency_conflict() {
+        // Arrange
+        let session_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
+        let repo = ConflictingEventRepository::new(vec![], session_id, 0, 1);
+
+        let command = PresentChoice {
+            correlation_id: Uuid::new_v4(),
+            session_id,
+        };
+
+        // Act
+        let result = handle_present_choice(&command, &clock, &*rng, &repo).await;
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::ConcurrencyConflict {
+                aggregate_id,
+                expected,
+                actual,
+            } => {
+                assert_eq!(aggregate_id, session_id);
+                assert_eq!(expected, 0);
+                assert_eq!(actual, 1);
+            }
+            other => panic!("expected ConcurrencyConflict, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_archive_session_propagates_concurrency_conflict() {
+        // Arrange
+        let session_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
+        let existing = vec![beat_advanced_event(session_id, fixed_now)];
+        let repo = ConflictingEventRepository::new(existing, session_id, 1, 2);
+
+        let command = ArchiveSession {
+            correlation_id: Uuid::new_v4(),
+            session_id,
+        };
+
+        // Act
+        let result = handle_archive_session(&command, &clock, &*rng, &repo).await;
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::ConcurrencyConflict {
+                aggregate_id,
+                expected,
+                actual,
+            } => {
+                assert_eq!(aggregate_id, session_id);
+                assert_eq!(expected, 1);
+                assert_eq!(actual, 2);
+            }
+            other => panic!("expected ConcurrencyConflict, got {other:?}"),
         }
     }
 }

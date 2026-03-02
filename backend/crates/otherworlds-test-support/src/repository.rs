@@ -123,6 +123,63 @@ impl EventRepository for EmptyEventRepository {
     }
 }
 
+/// An event repository that loads events successfully but always returns a
+/// `ConcurrencyConflict` error on `append_events`. Useful for testing that
+/// command handlers and route handlers propagate conflict errors correctly.
+#[derive(Debug)]
+pub struct ConflictingEventRepository {
+    load_result: Mutex<Vec<StoredEvent>>,
+    conflict_aggregate_id: Uuid,
+    expected_version: i64,
+    actual_version: i64,
+}
+
+impl ConflictingEventRepository {
+    /// Create a new conflicting repository.
+    ///
+    /// `load_events` will return `load_result`, and `append_events` will
+    /// always fail with `DomainError::ConcurrencyConflict` using the
+    /// configured fields.
+    #[must_use]
+    pub fn new(
+        load_result: Vec<StoredEvent>,
+        aggregate_id: Uuid,
+        expected: i64,
+        actual: i64,
+    ) -> Self {
+        Self {
+            load_result: Mutex::new(load_result),
+            conflict_aggregate_id: aggregate_id,
+            expected_version: expected,
+            actual_version: actual,
+        }
+    }
+}
+
+#[async_trait]
+impl EventRepository for ConflictingEventRepository {
+    async fn load_events(&self, _aggregate_id: Uuid) -> Result<Vec<StoredEvent>, DomainError> {
+        Ok(self.load_result.lock().unwrap().clone())
+    }
+
+    async fn append_events(
+        &self,
+        _aggregate_id: Uuid,
+        _expected_version: i64,
+        _events: &[StoredEvent],
+    ) -> Result<(), DomainError> {
+        Err(DomainError::ConcurrencyConflict {
+            aggregate_id: self.conflict_aggregate_id,
+            expected: self.expected_version,
+            actual: self.actual_version,
+        })
+    }
+
+    async fn list_aggregate_ids(&self, _event_types: &[&str]) -> Result<Vec<Uuid>, DomainError> {
+        Ok(vec![])
+    }
+}
+
 /// An event repository that always returns an infrastructure error. Useful for
 /// testing error-handling paths.
 #[derive(Debug)]

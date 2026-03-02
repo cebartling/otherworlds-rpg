@@ -158,7 +158,8 @@ mod tests {
     use otherworlds_core::rng::DeterministicRng;
     use otherworlds_narrative::domain::events::{BeatAdvanced, NarrativeEventKind};
     use otherworlds_test_support::{
-        EmptyEventRepository, FailingEventRepository, FixedClock, MockRng, RecordingEventRepository,
+        ConflictingEventRepository, EmptyEventRepository, FailingEventRepository, FixedClock,
+        MockRng, RecordingEventRepository,
     };
     use serde_json::Value;
     use sqlx::PgPool;
@@ -564,5 +565,94 @@ mod tests {
         let json: Value = serde_json::from_slice(&body_bytes).unwrap();
 
         assert_eq!(json["error"], "infrastructure_error");
+    }
+
+    fn conflicting_app_state(load_events: Vec<StoredEvent>) -> AppState {
+        let aggregate_id = Uuid::new_v4();
+        let repo = ConflictingEventRepository::new(load_events, aggregate_id, 0, 1);
+        app_state_with(Arc::new(repo))
+    }
+
+    #[tokio::test]
+    async fn test_advance_beat_returns_409_on_concurrency_conflict() {
+        // Arrange
+        let app = router().with_state(conflicting_app_state(vec![]));
+        let session_id = Uuid::new_v4();
+        let body = serde_json::json!({ "session_id": session_id });
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/advance-beat")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        assert_eq!(json["error"], "concurrency_conflict");
+        assert!(
+            json["message"]
+                .as_str()
+                .unwrap()
+                .contains("expected version")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_archive_session_returns_409_on_concurrency_conflict() {
+        // Arrange — pre-load a beat_advanced event so the session exists
+        let session_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let existing = vec![StoredEvent {
+            event_id: Uuid::new_v4(),
+            aggregate_id: session_id,
+            event_type: "narrative.beat_advanced".to_owned(),
+            payload: serde_json::to_value(NarrativeEventKind::BeatAdvanced(BeatAdvanced {
+                session_id,
+                beat_id: Uuid::new_v4(),
+            }))
+            .unwrap(),
+            sequence_number: 1,
+            correlation_id: Uuid::new_v4(),
+            causation_id: Uuid::new_v4(),
+            occurred_at: fixed_now,
+        }];
+        let aggregate_id = Uuid::new_v4();
+        let repo = ConflictingEventRepository::new(existing, aggregate_id, 1, 2);
+        let app = router().with_state(app_state_with(Arc::new(repo)));
+
+        let request = Request::builder()
+            .method("DELETE")
+            .uri(format!("/{session_id}"))
+            .body(Body::empty())
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        assert_eq!(json["error"], "concurrency_conflict");
+        assert!(
+            json["message"]
+                .as_str()
+                .unwrap()
+                .contains("expected version")
+        );
     }
 }
