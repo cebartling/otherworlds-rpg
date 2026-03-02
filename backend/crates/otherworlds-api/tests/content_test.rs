@@ -43,7 +43,7 @@ async fn test_content_ingest_and_validate_campaign(pool: PgPool) {
         app,
         "/api/v1/content/ingest-campaign",
         &serde_json::json!({
-            "source": "# Campaign Two\n\nAnother campaign."
+            "source": "---\ntitle: \"Campaign Two\"\n---\n\n# Scene: start\n\nAnother campaign.\n"
         }),
     )
     .await;
@@ -188,7 +188,7 @@ async fn test_content_full_lifecycle_ingest_validate_compile(pool: PgPool) {
         app,
         "/api/v1/content/ingest-campaign",
         &serde_json::json!({
-            "source": "# Full Lifecycle\n\nContent."
+            "source": "---\ntitle: \"Full Lifecycle\"\n---\n\n# Scene: start\n\nContent.\n"
         }),
     )
     .await;
