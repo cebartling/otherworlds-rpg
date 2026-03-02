@@ -26,13 +26,13 @@ If `pg_isready` fails, retry up to 5 times with 2-second pauses. If PostgreSQL i
 
 ## Step 2: Run Integration Tests
 
-Run from the `backend/` directory:
+Run from the `backend/` directory with `DATABASE_URL` set (required by `#[sqlx::test]`):
 
 ```bash
-cargo test --test '*' 2>&1
+DATABASE_URL="postgres://otherworlds:otherworlds@localhost:5432/otherworlds" cargo test --test '*' 2>&1
 ```
 
-`--test '*'` runs only integration test binaries (files in `tests/` directories), skipping inline `#[cfg(test)]` unit tests. These tests use `#[sqlx::test(migrations = "../../migrations")]` which auto-runs migrations per test.
+`--test '*'` runs only integration test binaries (files in `tests/` directories), skipping inline `#[cfg(test)]` unit tests. These tests use `#[sqlx::test(migrations = "../../migrations")]` which auto-runs migrations per test. The `DATABASE_URL` env var must point to the running PostgreSQL instance — `sqlx::test` will panic at startup if it is missing.
 
 **You must actually run this command and read the full output. Do not summarize from memory.**
 
