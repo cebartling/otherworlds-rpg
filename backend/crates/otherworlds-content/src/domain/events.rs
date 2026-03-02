@@ -29,6 +29,8 @@ pub struct CampaignCompiled {
     pub campaign_id: Uuid,
     /// The compiled campaign version hash.
     pub version_hash: String,
+    /// The compiled campaign data serialized as JSON.
+    pub compiled_data: String,
 }
 
 /// Emitted when a campaign is archived (soft-deleted).

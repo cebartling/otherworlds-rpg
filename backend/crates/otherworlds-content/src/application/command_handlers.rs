@@ -272,6 +272,10 @@ mod tests {
     };
     use otherworlds_test_support::{FixedClock, MockRng, RecordingEventRepository};
 
+    /// Valid campaign source with YAML front-matter and one scene.
+    const VALID_CAMPAIGN_SOURCE: &str =
+        "---\ntitle: \"Test Campaign\"\n---\n\n# Scene: start\n\nHello world.\n";
+
     fn dummy_ingested_event(aggregate_id: Uuid, fixed_now: DateTime<Utc>) -> StoredEvent {
         StoredEvent {
             event_id: Uuid::new_v4(),
@@ -280,7 +284,7 @@ mod tests {
             payload: serde_json::to_value(ContentEventKind::CampaignIngested(CampaignIngested {
                 campaign_id: aggregate_id,
                 version_hash: "abc123".to_owned(),
-                source: "# My Campaign".to_owned(),
+                source: VALID_CAMPAIGN_SOURCE.to_owned(),
             }))
             .unwrap(),
             sequence_number: 1,

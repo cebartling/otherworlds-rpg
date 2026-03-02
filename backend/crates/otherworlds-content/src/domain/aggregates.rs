@@ -9,6 +9,10 @@ use otherworlds_core::event::EventMetadata;
 use otherworlds_core::rng::DeterministicRng;
 use uuid::Uuid;
 
+use super::compiler::compile_parsed_campaign;
+use super::parser::parse_campaign;
+use super::validator::validate_parsed_campaign;
+
 use super::events::{
     CAMPAIGN_ARCHIVED_EVENT_TYPE, CAMPAIGN_COMPILED_EVENT_TYPE, CAMPAIGN_INGESTED_EVENT_TYPE,
     CAMPAIGN_VALIDATED_EVENT_TYPE, CampaignArchived, CampaignCompiled, CampaignIngested,
@@ -35,6 +39,8 @@ pub struct Campaign {
     pub(crate) version_hash: Option<String>,
     /// The raw source content (set on ingestion).
     pub(crate) source: Option<String>,
+    /// The compiled campaign data as JSON (set on compilation).
+    pub(crate) compiled_data: Option<String>,
     /// Uncommitted events pending persistence.
     uncommitted_events: Vec<ContentEvent>,
 }
@@ -52,6 +58,7 @@ impl Campaign {
             archived: false,
             version_hash: None,
             source: None,
+            compiled_data: None,
             uncommitted_events: Vec::new(),
         }
     }
@@ -121,12 +128,13 @@ impl Campaign {
 
     /// Validates a campaign, producing a `CampaignValidated` event.
     ///
-    /// Deep validation logic (schema checks, reference integrity,
-    /// scene graph connectivity) is deferred to a follow-up implementation.
+    /// Parses the campaign source Markdown and validates structural
+    /// integrity (scene references, NPC references, front-matter).
     ///
     /// # Errors
     ///
-    /// Returns `DomainError::Validation` if the campaign has not been ingested.
+    /// Returns `DomainError::Validation` if the campaign has not been ingested
+    /// or if the campaign source fails structural validation.
     pub fn validate_campaign(
         &mut self,
         correlation_id: Uuid,
@@ -139,6 +147,16 @@ impl Campaign {
                 self.id
             )));
         }
+
+        let source = self.source.as_deref().ok_or_else(|| {
+            DomainError::Infrastructure(format!(
+                "campaign {} is ingested but has no source — invariant violated",
+                self.id
+            ))
+        })?;
+
+        let parsed = parse_campaign(source)?;
+        validate_parsed_campaign(&parsed)?;
 
         let event = ContentEvent {
             metadata: EventMetadata {
@@ -161,12 +179,13 @@ impl Campaign {
 
     /// Compiles a campaign into runtime format, producing a `CampaignCompiled` event.
     ///
-    /// Deep compilation logic (scene graph generation, lookup tables,
-    /// runtime optimization) is deferred to a follow-up implementation.
+    /// Parses the campaign source and compiles it into an indexed
+    /// `CompiledCampaign` structure serialized as JSON.
     ///
     /// # Errors
     ///
     /// Returns `DomainError::Validation` if the campaign has not been validated.
+    /// Returns `DomainError::Infrastructure` if invariants are violated.
     pub fn compile_campaign(
         &mut self,
         correlation_id: Uuid,
@@ -187,6 +206,19 @@ impl Campaign {
             ))
         })?;
 
+        let source = self.source.as_deref().ok_or_else(|| {
+            DomainError::Infrastructure(format!(
+                "campaign {} is validated but has no source — invariant violated",
+                self.id
+            ))
+        })?;
+
+        let parsed = parse_campaign(source)?;
+        let compiled = compile_parsed_campaign(&parsed);
+        let compiled_data = serde_json::to_string(&compiled).map_err(|e| {
+            DomainError::Infrastructure(format!("compiled campaign serialization failed: {e}"))
+        })?;
+
         let event = ContentEvent {
             metadata: EventMetadata {
                 event_id: rng.next_uuid(),
@@ -200,6 +232,7 @@ impl Campaign {
             kind: ContentEventKind::CampaignCompiled(CampaignCompiled {
                 campaign_id: self.id,
                 version_hash,
+                compiled_data,
             }),
         };
 
@@ -265,8 +298,9 @@ impl AggregateRoot for Campaign {
             ContentEventKind::CampaignValidated(_) => {
                 self.validated = true;
             }
-            ContentEventKind::CampaignCompiled(_) => {
+            ContentEventKind::CampaignCompiled(payload) => {
                 self.compiled = true;
+                self.compiled_data = Some(payload.compiled_data.clone());
             }
             ContentEventKind::CampaignArchived(_) => {
                 self.archived = true;
@@ -291,6 +325,10 @@ mod tests {
     use otherworlds_core::aggregate::AggregateRoot;
     use otherworlds_core::event::DomainEvent;
     use otherworlds_test_support::{FixedClock, MockRng};
+
+    /// Valid campaign source with YAML front-matter and one scene.
+    const VALID_CAMPAIGN_SOURCE: &str =
+        "---\ntitle: \"Test Campaign\"\n---\n\n# Scene: start\n\nHello world.\n";
 
     #[test]
     fn test_ingest_campaign_produces_campaign_ingested_event() {
@@ -369,9 +407,9 @@ mod tests {
         let clock = FixedClock(fixed_now);
         let mut campaign = Campaign::new(campaign_id);
 
-        // Ingest first.
+        // Ingest first (with valid source for validation).
         campaign
-            .ingest_campaign("# My Campaign", Uuid::new_v4(), &clock, &mut MockRng)
+            .ingest_campaign(VALID_CAMPAIGN_SOURCE, Uuid::new_v4(), &clock, &mut MockRng)
             .unwrap();
         for event in campaign.uncommitted_events().to_vec() {
             campaign.apply(&event);
@@ -427,6 +465,35 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_campaign_returns_error_for_invalid_source() {
+        // Arrange — ingest source with no front-matter (invalid for validation).
+        let campaign_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let mut campaign = Campaign::new(campaign_id);
+
+        campaign
+            .ingest_campaign("# My Campaign", Uuid::new_v4(), &clock, &mut MockRng)
+            .unwrap();
+        for event in campaign.uncommitted_events().to_vec() {
+            campaign.apply(&event);
+        }
+        campaign.clear_uncommitted_events();
+
+        // Act
+        let result = campaign.validate_campaign(Uuid::new_v4(), &clock, &mut MockRng);
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::Validation(msg) => {
+                assert!(msg.contains("front-matter"));
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_compile_campaign_produces_campaign_compiled_event() {
         // Arrange
         let campaign_id = Uuid::new_v4();
@@ -435,9 +502,9 @@ mod tests {
         let clock = FixedClock(fixed_now);
         let mut campaign = Campaign::new(campaign_id);
 
-        // Ingest then validate.
+        // Ingest then validate with valid source.
         campaign
-            .ingest_campaign("# My Campaign", Uuid::new_v4(), &clock, &mut MockRng)
+            .ingest_campaign(VALID_CAMPAIGN_SOURCE, Uuid::new_v4(), &clock, &mut MockRng)
             .unwrap();
         for event in campaign.uncommitted_events().to_vec() {
             campaign.apply(&event);
@@ -475,6 +542,7 @@ mod tests {
             ContentEventKind::CampaignCompiled(payload) => {
                 assert_eq!(payload.campaign_id, campaign_id);
                 assert!(!payload.version_hash.is_empty());
+                assert!(!payload.compiled_data.is_empty());
             }
             other => panic!("expected CampaignCompiled, got {other:?}"),
         }
@@ -489,7 +557,7 @@ mod tests {
         let mut campaign = Campaign::new(campaign_id);
 
         campaign
-            .ingest_campaign("# My Campaign", Uuid::new_v4(), &clock, &mut MockRng)
+            .ingest_campaign(VALID_CAMPAIGN_SOURCE, Uuid::new_v4(), &clock, &mut MockRng)
             .unwrap();
         for event in campaign.uncommitted_events().to_vec() {
             campaign.apply(&event);
@@ -667,13 +735,13 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_campaign_compiled_sets_compiled_flag() {
+    fn test_apply_campaign_compiled_sets_compiled_flag_and_data() {
         // Arrange
         let campaign_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let mut campaign = Campaign::new(campaign_id);
 
-        // Pre-apply ingested + validated so the aggregate is in a valid state.
+        // Pre-apply ingested so the aggregate is in a valid state.
         let ingested_event = ContentEvent {
             metadata: EventMetadata {
                 event_id: Uuid::new_v4(),
@@ -705,6 +773,7 @@ mod tests {
             kind: ContentEventKind::CampaignCompiled(CampaignCompiled {
                 campaign_id,
                 version_hash: "abc123".to_owned(),
+                compiled_data: "{\"title\":\"Test\"}".to_owned(),
             }),
         };
 
@@ -713,6 +782,10 @@ mod tests {
 
         // Assert
         assert!(campaign.compiled);
+        assert_eq!(
+            campaign.compiled_data,
+            Some("{\"title\":\"Test\"}".to_owned())
+        );
         assert_eq!(campaign.version, 2);
     }
 
@@ -724,9 +797,9 @@ mod tests {
         let clock = FixedClock(fixed_now);
         let mut campaign = Campaign::new(campaign_id);
 
-        // Ingest.
+        // Ingest with valid source.
         campaign
-            .ingest_campaign("# My Campaign", Uuid::new_v4(), &clock, &mut MockRng)
+            .ingest_campaign(VALID_CAMPAIGN_SOURCE, Uuid::new_v4(), &clock, &mut MockRng)
             .unwrap();
         for event in campaign.uncommitted_events().to_vec() {
             campaign.apply(&event);
@@ -755,5 +828,6 @@ mod tests {
         assert!(campaign.compiled);
         assert!(campaign.ingested);
         assert!(campaign.validated);
+        assert!(campaign.compiled_data.is_some());
     }
 }

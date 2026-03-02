@@ -304,6 +304,7 @@ mod tests {
                     CampaignCompiled {
                         campaign_id,
                         version_hash: "abc123".to_owned(),
+                        compiled_data: "{}".to_owned(),
                     },
                 ))
                 .unwrap(),
