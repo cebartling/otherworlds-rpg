@@ -4,6 +4,7 @@ use otherworlds_core::aggregate::AggregateRoot;
 use otherworlds_core::clock::Clock;
 use otherworlds_core::error::DomainError;
 use otherworlds_core::event::EventMetadata;
+use otherworlds_core::rng::DeterministicRng;
 use uuid::Uuid;
 
 use super::events::{
@@ -48,13 +49,15 @@ impl NarrativeSession {
     }
 
     /// Advances the narrative to the next beat, producing a `BeatAdvanced` event.
-    pub fn advance_beat(&mut self, correlation_id: Uuid, clock: &dyn Clock) {
-        // TODO: event_id and beat_id use Uuid::new_v4() which breaks replay determinism.
-        // Requires extending DeterministicRng to support UUID generation and
-        // threading &mut dyn DeterministicRng through all domain methods.
+    pub fn advance_beat(
+        &mut self,
+        correlation_id: Uuid,
+        clock: &dyn Clock,
+        rng: &mut dyn DeterministicRng,
+    ) {
         let event = NarrativeEvent {
             metadata: EventMetadata {
-                event_id: Uuid::new_v4(),
+                event_id: rng.next_uuid(),
                 event_type: "narrative.beat_advanced".to_owned(),
                 aggregate_id: self.id,
                 sequence_number: self.next_sequence_number(),
@@ -64,7 +67,7 @@ impl NarrativeSession {
             },
             kind: NarrativeEventKind::BeatAdvanced(BeatAdvanced {
                 session_id: self.id,
-                beat_id: Uuid::new_v4(),
+                beat_id: rng.next_uuid(),
             }),
         };
 
@@ -72,12 +75,15 @@ impl NarrativeSession {
     }
 
     /// Presents a choice to the player, producing a `ChoicePresented` event.
-    pub fn present_choice(&mut self, correlation_id: Uuid, clock: &dyn Clock) {
-        // TODO: event_id and choice_id use Uuid::new_v4() which breaks replay determinism.
-        // See TODO on `advance_beat()` for details.
+    pub fn present_choice(
+        &mut self,
+        correlation_id: Uuid,
+        clock: &dyn Clock,
+        rng: &mut dyn DeterministicRng,
+    ) {
         let event = NarrativeEvent {
             metadata: EventMetadata {
-                event_id: Uuid::new_v4(),
+                event_id: rng.next_uuid(),
                 event_type: "narrative.choice_presented".to_owned(),
                 aggregate_id: self.id,
                 sequence_number: self.next_sequence_number(),
@@ -87,7 +93,7 @@ impl NarrativeSession {
             },
             kind: NarrativeEventKind::ChoicePresented(ChoicePresented {
                 session_id: self.id,
-                choice_id: Uuid::new_v4(),
+                choice_id: rng.next_uuid(),
             }),
         };
 
@@ -99,7 +105,12 @@ impl NarrativeSession {
     /// # Errors
     ///
     /// Returns `DomainError::Validation` if the session is already archived.
-    pub fn archive(&mut self, correlation_id: Uuid, clock: &dyn Clock) -> Result<(), DomainError> {
+    pub fn archive(
+        &mut self,
+        correlation_id: Uuid,
+        clock: &dyn Clock,
+        rng: &mut dyn DeterministicRng,
+    ) -> Result<(), DomainError> {
         if self.archived {
             return Err(DomainError::Validation(
                 "session is already archived".into(),
@@ -108,7 +119,7 @@ impl NarrativeSession {
 
         let event = NarrativeEvent {
             metadata: EventMetadata {
-                event_id: Uuid::new_v4(),
+                event_id: rng.next_uuid(),
                 event_type: "narrative.session_archived".to_owned(),
                 aggregate_id: self.id,
                 sequence_number: self.next_sequence_number(),
@@ -168,7 +179,7 @@ mod tests {
     use chrono::{TimeZone, Utc};
     use otherworlds_core::aggregate::AggregateRoot;
     use otherworlds_core::event::DomainEvent;
-    use otherworlds_test_support::FixedClock;
+    use otherworlds_test_support::{FixedClock, MockRng};
 
     #[test]
     fn test_advance_beat_produces_beat_advanced_event() {
@@ -178,9 +189,10 @@ mod tests {
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
         let mut session = NarrativeSession::new(session_id);
+        let mut rng = MockRng;
 
         // Act
-        session.advance_beat(correlation_id, &clock);
+        session.advance_beat(correlation_id, &clock, &mut rng);
 
         // Assert
         let events = session.uncommitted_events();
@@ -274,9 +286,10 @@ mod tests {
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
         let mut session = NarrativeSession::new(session_id);
+        let mut rng = MockRng;
 
         // Act
-        session.present_choice(correlation_id, &clock);
+        session.present_choice(correlation_id, &clock, &mut rng);
 
         // Assert
         let events = session.uncommitted_events();
@@ -308,9 +321,10 @@ mod tests {
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
         let mut session = NarrativeSession::new(session_id);
+        let mut rng = MockRng;
 
         // Act
-        let result = session.archive(correlation_id, &clock);
+        let result = session.archive(correlation_id, &clock, &mut rng);
 
         // Assert
         assert!(result.is_ok());
@@ -372,9 +386,10 @@ mod tests {
         let clock = FixedClock(fixed_now);
         let mut session = NarrativeSession::new(session_id);
         session.archived = true;
+        let mut rng = MockRng;
 
         // Act
-        let result = session.archive(correlation_id, &clock);
+        let result = session.archive(correlation_id, &clock, &mut rng);
 
         // Assert
         assert!(result.is_err());

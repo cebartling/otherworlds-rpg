@@ -81,6 +81,7 @@ async fn ingest_campaign(
     let result = command_handlers::handle_ingest_campaign(
         &command,
         state.clock.as_ref(),
+        &state.rng,
         &*state.event_repository,
     )
     .await?;
@@ -109,6 +110,7 @@ async fn validate_campaign(
     let result = command_handlers::handle_validate_campaign(
         &command,
         state.clock.as_ref(),
+        &state.rng,
         &*state.event_repository,
     )
     .await?;
@@ -137,6 +139,7 @@ async fn compile_campaign(
     let result = command_handlers::handle_compile_campaign(
         &command,
         state.clock.as_ref(),
+        &state.rng,
         &*state.event_repository,
     )
     .await?;
@@ -165,6 +168,7 @@ async fn archive_campaign(
     let result = command_handlers::handle_archive_campaign(
         &command,
         state.clock.as_ref(),
+        &state.rng,
         &*state.event_repository,
     )
     .await?;

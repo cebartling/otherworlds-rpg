@@ -140,4 +140,39 @@ mod tests {
         rng.next_f64();
         rng.next_f64(); // exhausted
     }
+
+    #[test]
+    fn test_mock_rng_next_uuid_returns_nil() {
+        let mut rng = MockRng;
+        let uuid = rng.next_uuid();
+        // MockRng returns min=0 for all next_u32_range calls → nil UUID
+        assert_eq!(uuid, uuid::Uuid::nil());
+    }
+
+    #[test]
+    fn test_mock_rng_next_uuid_is_stable() {
+        let mut rng = MockRng;
+        let uuid1 = rng.next_uuid();
+        let uuid2 = rng.next_uuid();
+        assert_eq!(uuid1, uuid2);
+    }
+
+    #[test]
+    fn test_sequence_rng_next_uuid_consumes_four_values() {
+        let mut rng = SequenceRng::new(vec![1, 2, 3, 4, 99]);
+        let _uuid = rng.next_uuid();
+        // After next_uuid(), 4 values consumed; next call should return 99
+        assert_eq!(rng.next_u32_range(0, u32::MAX), 99);
+    }
+
+    #[test]
+    fn test_sequence_rng_next_uuid_produces_predictable_uuid() {
+        let mut rng = SequenceRng::new(vec![0xDEAD_BEEF, 0xCAFE_BABE, 0x1234_5678, 0x9ABC_DEF0]);
+        let uuid = rng.next_uuid();
+        let expected = uuid::Uuid::from_u64_pair(
+            (u64::from(0xDEAD_BEEFu32) << 32) | u64::from(0xCAFE_BABEu32),
+            (u64::from(0x1234_5678u32) << 32) | u64::from(0x9ABC_DEF0u32),
+        );
+        assert_eq!(uuid, expected);
+    }
 }

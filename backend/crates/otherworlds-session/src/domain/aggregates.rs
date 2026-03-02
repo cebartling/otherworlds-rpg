@@ -4,6 +4,7 @@ use otherworlds_core::aggregate::AggregateRoot;
 use otherworlds_core::clock::Clock;
 use otherworlds_core::error::DomainError;
 use otherworlds_core::event::EventMetadata;
+use otherworlds_core::rng::DeterministicRng;
 use uuid::Uuid;
 
 use super::events::{
@@ -58,13 +59,11 @@ impl CampaignRun {
         campaign_id: Uuid,
         correlation_id: Uuid,
         clock: &dyn Clock,
+        rng: &mut dyn DeterministicRng,
     ) {
-        // TODO: event_id uses Uuid::new_v4() which breaks replay determinism.
-        // Requires extending DeterministicRng to support UUID generation and
-        // threading &mut dyn DeterministicRng through all domain methods.
         let event = SessionEvent {
             metadata: EventMetadata {
-                event_id: Uuid::new_v4(),
+                event_id: rng.next_uuid(),
                 event_type: CAMPAIGN_RUN_STARTED_EVENT_TYPE.to_owned(),
                 aggregate_id: self.id,
                 sequence_number: self.next_sequence_number(),
@@ -82,12 +81,15 @@ impl CampaignRun {
     }
 
     /// Creates a checkpoint, producing a `CheckpointCreated` event.
-    pub fn create_checkpoint(&mut self, correlation_id: Uuid, clock: &dyn Clock) {
-        // TODO: event_id and checkpoint_id use Uuid::new_v4() which breaks replay determinism.
-        // See TODO on `start_campaign_run()` for details.
+    pub fn create_checkpoint(
+        &mut self,
+        correlation_id: Uuid,
+        clock: &dyn Clock,
+        rng: &mut dyn DeterministicRng,
+    ) {
         let event = SessionEvent {
             metadata: EventMetadata {
-                event_id: Uuid::new_v4(),
+                event_id: rng.next_uuid(),
                 event_type: CHECKPOINT_CREATED_EVENT_TYPE.to_owned(),
                 aggregate_id: self.id,
                 sequence_number: self.next_sequence_number(),
@@ -97,7 +99,7 @@ impl CampaignRun {
             },
             kind: SessionEventKind::CheckpointCreated(CheckpointCreated {
                 run_id: self.id,
-                checkpoint_id: Uuid::new_v4(),
+                checkpoint_id: rng.next_uuid(),
             }),
         };
 
@@ -111,12 +113,11 @@ impl CampaignRun {
         from_checkpoint_id: Uuid,
         correlation_id: Uuid,
         clock: &dyn Clock,
+        rng: &mut dyn DeterministicRng,
     ) {
-        // TODO: event_id uses Uuid::new_v4() which breaks replay determinism.
-        // See TODO on `start_campaign_run()` for details.
         let event = SessionEvent {
             metadata: EventMetadata {
-                event_id: Uuid::new_v4(),
+                event_id: rng.next_uuid(),
                 event_type: TIMELINE_BRANCHED_EVENT_TYPE.to_owned(),
                 aggregate_id: self.id,
                 sequence_number: self.next_sequence_number(),
@@ -139,7 +140,12 @@ impl CampaignRun {
     /// # Errors
     ///
     /// Returns `DomainError::Validation` if the campaign run is already archived.
-    pub fn archive(&mut self, correlation_id: Uuid, clock: &dyn Clock) -> Result<(), DomainError> {
+    pub fn archive(
+        &mut self,
+        correlation_id: Uuid,
+        clock: &dyn Clock,
+        rng: &mut dyn DeterministicRng,
+    ) -> Result<(), DomainError> {
         if self.archived {
             return Err(DomainError::Validation(
                 "campaign run is already archived".into(),
@@ -147,7 +153,7 @@ impl CampaignRun {
         }
         let event = SessionEvent {
             metadata: EventMetadata {
-                event_id: Uuid::new_v4(),
+                event_id: rng.next_uuid(),
                 event_type: CAMPAIGN_RUN_ARCHIVED_EVENT_TYPE.to_owned(),
                 aggregate_id: self.id,
                 sequence_number: self.next_sequence_number(),
@@ -208,7 +214,7 @@ mod tests {
     use otherworlds_core::aggregate::AggregateRoot;
     use otherworlds_core::error::DomainError;
     use otherworlds_core::event::DomainEvent;
-    use otherworlds_test_support::FixedClock;
+    use otherworlds_test_support::{FixedClock, MockRng};
 
     #[test]
     fn test_start_campaign_run_produces_campaign_run_started_event() {
@@ -221,7 +227,7 @@ mod tests {
         let mut run = CampaignRun::new(run_id);
 
         // Act
-        run.start_campaign_run(campaign_id, correlation_id, &clock);
+        run.start_campaign_run(campaign_id, correlation_id, &clock, &mut MockRng);
 
         // Assert
         let events = run.uncommitted_events();
@@ -351,7 +357,7 @@ mod tests {
         let mut run = CampaignRun::new(run_id);
 
         // Act
-        run.create_checkpoint(correlation_id, &clock);
+        run.create_checkpoint(correlation_id, &clock, &mut MockRng);
 
         // Assert
         let events = run.uncommitted_events();
@@ -387,7 +393,13 @@ mod tests {
         let mut run = CampaignRun::new(branch_run_id);
 
         // Act
-        run.branch_timeline(source_run_id, from_checkpoint_id, correlation_id, &clock);
+        run.branch_timeline(
+            source_run_id,
+            from_checkpoint_id,
+            correlation_id,
+            &clock,
+            &mut MockRng,
+        );
 
         // Assert
         let events = run.uncommitted_events();
@@ -423,7 +435,7 @@ mod tests {
         let mut run = CampaignRun::new(run_id);
 
         // Act
-        run.archive(correlation_id, &clock).unwrap();
+        run.archive(correlation_id, &clock, &mut MockRng).unwrap();
 
         // Assert
         let events = run.uncommitted_events();
@@ -485,14 +497,14 @@ mod tests {
         let mut run = CampaignRun::new(run_id);
 
         // Archive once — apply the event to update state.
-        run.archive(Uuid::new_v4(), &clock).unwrap();
+        run.archive(Uuid::new_v4(), &clock, &mut MockRng).unwrap();
         for event in run.uncommitted_events().to_vec() {
             run.apply(&event);
         }
         run.clear_uncommitted_events();
 
         // Act — try to archive again.
-        let result = run.archive(Uuid::new_v4(), &clock);
+        let result = run.archive(Uuid::new_v4(), &clock, &mut MockRng);
 
         // Assert
         assert!(result.is_err());

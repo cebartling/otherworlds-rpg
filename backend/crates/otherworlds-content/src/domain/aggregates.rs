@@ -6,6 +6,7 @@ use otherworlds_core::aggregate::AggregateRoot;
 use otherworlds_core::clock::Clock;
 use otherworlds_core::error::DomainError;
 use otherworlds_core::event::EventMetadata;
+use otherworlds_core::rng::DeterministicRng;
 use uuid::Uuid;
 
 use super::events::{
@@ -74,6 +75,7 @@ impl Campaign {
         source: &str,
         correlation_id: Uuid,
         clock: &dyn Clock,
+        rng: &mut dyn DeterministicRng,
     ) -> Result<(), DomainError> {
         if source.trim().is_empty() {
             return Err(DomainError::Validation(
@@ -89,12 +91,9 @@ impl Campaign {
 
         let version_hash = Self::compute_version_hash(source);
 
-        // TODO: event_id uses Uuid::new_v4() which breaks replay determinism.
-        // Requires extending DeterministicRng to support UUID generation and
-        // threading &mut dyn DeterministicRng through all domain methods.
         let event = ContentEvent {
             metadata: EventMetadata {
-                event_id: Uuid::new_v4(),
+                event_id: rng.next_uuid(),
                 event_type: CAMPAIGN_INGESTED_EVENT_TYPE.to_owned(),
                 aggregate_id: self.id,
                 sequence_number: self.next_sequence_number(),
@@ -124,6 +123,7 @@ impl Campaign {
         &mut self,
         correlation_id: Uuid,
         clock: &dyn Clock,
+        rng: &mut dyn DeterministicRng,
     ) -> Result<(), DomainError> {
         if !self.ingested {
             return Err(DomainError::Validation(format!(
@@ -132,11 +132,9 @@ impl Campaign {
             )));
         }
 
-        // TODO: event_id uses Uuid::new_v4() which breaks replay determinism.
-        // See TODO on `ingest_campaign()` for details.
         let event = ContentEvent {
             metadata: EventMetadata {
-                event_id: Uuid::new_v4(),
+                event_id: rng.next_uuid(),
                 event_type: CAMPAIGN_VALIDATED_EVENT_TYPE.to_owned(),
                 aggregate_id: self.id,
                 sequence_number: self.next_sequence_number(),
@@ -165,6 +163,7 @@ impl Campaign {
         &mut self,
         correlation_id: Uuid,
         clock: &dyn Clock,
+        rng: &mut dyn DeterministicRng,
     ) -> Result<(), DomainError> {
         if !self.validated {
             return Err(DomainError::Validation(format!(
@@ -180,11 +179,9 @@ impl Campaign {
             ))
         })?;
 
-        // TODO: event_id uses Uuid::new_v4() which breaks replay determinism.
-        // See TODO on `ingest_campaign()` for details.
         let event = ContentEvent {
             metadata: EventMetadata {
-                event_id: Uuid::new_v4(),
+                event_id: rng.next_uuid(),
                 event_type: CAMPAIGN_COMPILED_EVENT_TYPE.to_owned(),
                 aggregate_id: self.id,
                 sequence_number: self.next_sequence_number(),
@@ -207,18 +204,21 @@ impl Campaign {
     /// # Errors
     ///
     /// Returns `DomainError::Validation` if the campaign is already archived.
-    pub fn archive(&mut self, correlation_id: Uuid, clock: &dyn Clock) -> Result<(), DomainError> {
+    pub fn archive(
+        &mut self,
+        correlation_id: Uuid,
+        clock: &dyn Clock,
+        rng: &mut dyn DeterministicRng,
+    ) -> Result<(), DomainError> {
         if self.archived {
             return Err(DomainError::Validation(
                 "campaign is already archived".into(),
             ));
         }
 
-        // TODO: event_id uses Uuid::new_v4() which breaks replay determinism.
-        // See TODO on `ingest_campaign()` for details.
         let event = ContentEvent {
             metadata: EventMetadata {
-                event_id: Uuid::new_v4(),
+                event_id: rng.next_uuid(),
                 event_type: CAMPAIGN_ARCHIVED_EVENT_TYPE.to_owned(),
                 aggregate_id: self.id,
                 sequence_number: self.next_sequence_number(),
@@ -279,7 +279,7 @@ mod tests {
     use chrono::{TimeZone, Utc};
     use otherworlds_core::aggregate::AggregateRoot;
     use otherworlds_core::event::DomainEvent;
-    use otherworlds_test_support::FixedClock;
+    use otherworlds_test_support::{FixedClock, MockRng};
 
     #[test]
     fn test_ingest_campaign_produces_campaign_ingested_event() {
@@ -292,7 +292,7 @@ mod tests {
 
         // Act
         campaign
-            .ingest_campaign("# My Campaign", correlation_id, &clock)
+            .ingest_campaign("# My Campaign", correlation_id, &clock, &mut MockRng)
             .unwrap();
 
         // Assert
@@ -327,7 +327,7 @@ mod tests {
         let mut campaign = Campaign::new(campaign_id);
 
         campaign
-            .ingest_campaign("# My Campaign", Uuid::new_v4(), &clock)
+            .ingest_campaign("# My Campaign", Uuid::new_v4(), &clock, &mut MockRng)
             .unwrap();
         for event in campaign.uncommitted_events().to_vec() {
             campaign.apply(&event);
@@ -335,7 +335,8 @@ mod tests {
         campaign.clear_uncommitted_events();
 
         // Act
-        let result = campaign.ingest_campaign("# My Campaign", Uuid::new_v4(), &clock);
+        let result =
+            campaign.ingest_campaign("# My Campaign", Uuid::new_v4(), &clock, &mut MockRng);
 
         // Assert
         assert!(result.is_err());
@@ -358,7 +359,7 @@ mod tests {
 
         // Ingest first.
         campaign
-            .ingest_campaign("# My Campaign", Uuid::new_v4(), &clock)
+            .ingest_campaign("# My Campaign", Uuid::new_v4(), &clock, &mut MockRng)
             .unwrap();
         for event in campaign.uncommitted_events().to_vec() {
             campaign.apply(&event);
@@ -366,7 +367,9 @@ mod tests {
         campaign.clear_uncommitted_events();
 
         // Act
-        campaign.validate_campaign(correlation_id, &clock).unwrap();
+        campaign
+            .validate_campaign(correlation_id, &clock, &mut MockRng)
+            .unwrap();
 
         // Assert
         let events = campaign.uncommitted_events();
@@ -399,7 +402,7 @@ mod tests {
         let mut campaign = Campaign::new(campaign_id);
 
         // Act
-        let result = campaign.validate_campaign(Uuid::new_v4(), &clock);
+        let result = campaign.validate_campaign(Uuid::new_v4(), &clock, &mut MockRng);
 
         // Assert
         assert!(result.is_err());
@@ -422,21 +425,25 @@ mod tests {
 
         // Ingest then validate.
         campaign
-            .ingest_campaign("# My Campaign", Uuid::new_v4(), &clock)
+            .ingest_campaign("# My Campaign", Uuid::new_v4(), &clock, &mut MockRng)
             .unwrap();
         for event in campaign.uncommitted_events().to_vec() {
             campaign.apply(&event);
         }
         campaign.clear_uncommitted_events();
 
-        campaign.validate_campaign(Uuid::new_v4(), &clock).unwrap();
+        campaign
+            .validate_campaign(Uuid::new_v4(), &clock, &mut MockRng)
+            .unwrap();
         for event in campaign.uncommitted_events().to_vec() {
             campaign.apply(&event);
         }
         campaign.clear_uncommitted_events();
 
         // Act
-        campaign.compile_campaign(correlation_id, &clock).unwrap();
+        campaign
+            .compile_campaign(correlation_id, &clock, &mut MockRng)
+            .unwrap();
 
         // Assert
         let events = campaign.uncommitted_events();
@@ -470,7 +477,7 @@ mod tests {
         let mut campaign = Campaign::new(campaign_id);
 
         campaign
-            .ingest_campaign("# My Campaign", Uuid::new_v4(), &clock)
+            .ingest_campaign("# My Campaign", Uuid::new_v4(), &clock, &mut MockRng)
             .unwrap();
         for event in campaign.uncommitted_events().to_vec() {
             campaign.apply(&event);
@@ -478,7 +485,7 @@ mod tests {
         campaign.clear_uncommitted_events();
 
         // Act
-        let result = campaign.compile_campaign(Uuid::new_v4(), &clock);
+        let result = campaign.compile_campaign(Uuid::new_v4(), &clock, &mut MockRng);
 
         // Assert
         assert!(result.is_err());
@@ -499,7 +506,7 @@ mod tests {
         let mut campaign = Campaign::new(campaign_id);
 
         // Act
-        let result = campaign.ingest_campaign("", Uuid::new_v4(), &clock);
+        let result = campaign.ingest_campaign("", Uuid::new_v4(), &clock, &mut MockRng);
 
         // Assert
         assert!(result.is_err());
@@ -521,7 +528,9 @@ mod tests {
         let mut campaign = Campaign::new(campaign_id);
 
         // Act
-        campaign.archive(correlation_id, &clock).unwrap();
+        campaign
+            .archive(correlation_id, &clock, &mut MockRng)
+            .unwrap();
 
         // Assert
         let events = campaign.uncommitted_events();
@@ -553,14 +562,16 @@ mod tests {
         let clock = FixedClock(fixed_now);
         let mut campaign = Campaign::new(campaign_id);
 
-        campaign.archive(Uuid::new_v4(), &clock).unwrap();
+        campaign
+            .archive(Uuid::new_v4(), &clock, &mut MockRng)
+            .unwrap();
         for event in campaign.uncommitted_events().to_vec() {
             campaign.apply(&event);
         }
         campaign.clear_uncommitted_events();
 
         // Act
-        let result = campaign.archive(Uuid::new_v4(), &clock);
+        let result = campaign.archive(Uuid::new_v4(), &clock, &mut MockRng);
 
         // Assert
         assert!(result.is_err());

@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use otherworlds_core::aggregate::AggregateRoot;
 use otherworlds_core::clock::Clock;
 use otherworlds_core::event::EventMetadata;
+use otherworlds_core::rng::DeterministicRng;
 use uuid::Uuid;
 
 use otherworlds_core::error::DomainError;
@@ -55,13 +56,16 @@ impl Character {
     }
 
     /// Creates a character, producing a `CharacterCreated` event.
-    pub fn create(&mut self, name: String, correlation_id: Uuid, clock: &dyn Clock) {
-        // TODO: event_id uses Uuid::new_v4() which breaks replay determinism.
-        // Requires extending DeterministicRng to support UUID generation and
-        // threading &mut dyn DeterministicRng through all domain methods.
+    pub fn create(
+        &mut self,
+        name: String,
+        correlation_id: Uuid,
+        clock: &dyn Clock,
+        rng: &mut dyn DeterministicRng,
+    ) {
         let event = CharacterEvent {
             metadata: EventMetadata {
-                event_id: Uuid::new_v4(),
+                event_id: rng.next_uuid(),
                 event_type: "character.character_created".to_owned(),
                 aggregate_id: self.id,
                 sequence_number: self.next_sequence_number(),
@@ -85,12 +89,11 @@ impl Character {
         new_value: i32,
         correlation_id: Uuid,
         clock: &dyn Clock,
+        rng: &mut dyn DeterministicRng,
     ) {
-        // TODO: event_id uses Uuid::new_v4() which breaks replay determinism.
-        // See TODO on `create()` for details.
         let event = CharacterEvent {
             metadata: EventMetadata {
-                event_id: Uuid::new_v4(),
+                event_id: rng.next_uuid(),
                 event_type: "character.attribute_modified".to_owned(),
                 aggregate_id: self.id,
                 sequence_number: self.next_sequence_number(),
@@ -113,7 +116,12 @@ impl Character {
     /// # Errors
     ///
     /// Returns `DomainError::Validation` if the character is already archived.
-    pub fn archive(&mut self, correlation_id: Uuid, clock: &dyn Clock) -> Result<(), DomainError> {
+    pub fn archive(
+        &mut self,
+        correlation_id: Uuid,
+        clock: &dyn Clock,
+        rng: &mut dyn DeterministicRng,
+    ) -> Result<(), DomainError> {
         if self.archived {
             return Err(DomainError::Validation(
                 "character is already archived".into(),
@@ -122,7 +130,7 @@ impl Character {
 
         let event = CharacterEvent {
             metadata: EventMetadata {
-                event_id: Uuid::new_v4(),
+                event_id: rng.next_uuid(),
                 event_type: "character.character_archived".to_owned(),
                 aggregate_id: self.id,
                 sequence_number: self.next_sequence_number(),
@@ -140,12 +148,16 @@ impl Character {
     }
 
     /// Awards experience to a character, producing an `ExperienceGained` event.
-    pub fn award_experience(&mut self, amount: u32, correlation_id: Uuid, clock: &dyn Clock) {
-        // TODO: event_id uses Uuid::new_v4() which breaks replay determinism.
-        // See TODO on `create()` for details.
+    pub fn award_experience(
+        &mut self,
+        amount: u32,
+        correlation_id: Uuid,
+        clock: &dyn Clock,
+        rng: &mut dyn DeterministicRng,
+    ) {
         let event = CharacterEvent {
             metadata: EventMetadata {
-                event_id: Uuid::new_v4(),
+                event_id: rng.next_uuid(),
                 event_type: "character.experience_gained".to_owned(),
                 aggregate_id: self.id,
                 sequence_number: self.next_sequence_number(),
@@ -208,7 +220,7 @@ mod tests {
     use chrono::{TimeZone, Utc};
     use otherworlds_core::aggregate::AggregateRoot;
     use otherworlds_core::event::DomainEvent;
-    use otherworlds_test_support::FixedClock;
+    use otherworlds_test_support::{FixedClock, MockRng};
 
     #[test]
     fn test_create_produces_character_created_event() {
@@ -220,7 +232,7 @@ mod tests {
         let mut character = Character::new(character_id);
 
         // Act
-        character.create("Alaric".to_owned(), correlation_id, &clock);
+        character.create("Alaric".to_owned(), correlation_id, &clock, &mut MockRng);
 
         // Assert
         let events = character.uncommitted_events();
@@ -255,7 +267,13 @@ mod tests {
         let mut character = Character::new(character_id);
 
         // Act
-        character.modify_attribute("strength".to_owned(), 18, correlation_id, &clock);
+        character.modify_attribute(
+            "strength".to_owned(),
+            18,
+            correlation_id,
+            &clock,
+            &mut MockRng,
+        );
 
         // Assert
         let events = character.uncommitted_events();
@@ -398,7 +416,7 @@ mod tests {
         let mut character = Character::new(character_id);
 
         // Act
-        character.award_experience(250, correlation_id, &clock);
+        character.award_experience(250, correlation_id, &clock, &mut MockRng);
 
         // Assert
         let events = character.uncommitted_events();
@@ -433,7 +451,7 @@ mod tests {
         let mut character = Character::new(character_id);
 
         // Act
-        let result = character.archive(correlation_id, &clock);
+        let result = character.archive(correlation_id, &clock, &mut MockRng);
 
         // Assert
         assert!(result.is_ok());
@@ -497,7 +515,7 @@ mod tests {
         character.archived = true;
 
         // Act
-        let result = character.archive(correlation_id, &clock);
+        let result = character.archive(correlation_id, &clock, &mut MockRng);
 
         // Assert
         assert!(result.is_err());

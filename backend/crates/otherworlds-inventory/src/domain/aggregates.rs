@@ -6,6 +6,7 @@ use otherworlds_core::aggregate::AggregateRoot;
 use otherworlds_core::clock::Clock;
 use otherworlds_core::error::DomainError;
 use otherworlds_core::event::EventMetadata;
+use otherworlds_core::rng::DeterministicRng;
 use uuid::Uuid;
 
 use super::events::{
@@ -58,6 +59,7 @@ impl Inventory {
         item_id: Uuid,
         correlation_id: Uuid,
         clock: &dyn Clock,
+        rng: &mut dyn DeterministicRng,
     ) -> Result<(), DomainError> {
         if self.items.contains(&item_id) {
             return Err(DomainError::Validation(format!(
@@ -65,12 +67,9 @@ impl Inventory {
                 self.id
             )));
         }
-        // TODO: event_id uses Uuid::new_v4() which breaks replay determinism.
-        // Requires extending DeterministicRng to support UUID generation and
-        // threading &mut dyn DeterministicRng through all domain methods.
         let event = InventoryEvent {
             metadata: EventMetadata {
-                event_id: Uuid::new_v4(),
+                event_id: rng.next_uuid(),
                 event_type: ITEM_ADDED_EVENT_TYPE.to_owned(),
                 aggregate_id: self.id,
                 sequence_number: self.next_sequence_number(),
@@ -98,6 +97,7 @@ impl Inventory {
         item_id: Uuid,
         correlation_id: Uuid,
         clock: &dyn Clock,
+        rng: &mut dyn DeterministicRng,
     ) -> Result<(), DomainError> {
         if !self.items.contains(&item_id) {
             return Err(DomainError::Validation(format!(
@@ -105,11 +105,9 @@ impl Inventory {
                 self.id
             )));
         }
-        // TODO: event_id uses Uuid::new_v4() which breaks replay determinism.
-        // See TODO on `add_item()` for details.
         let event = InventoryEvent {
             metadata: EventMetadata {
-                event_id: Uuid::new_v4(),
+                event_id: rng.next_uuid(),
                 event_type: ITEM_REMOVED_EVENT_TYPE.to_owned(),
                 aggregate_id: self.id,
                 sequence_number: self.next_sequence_number(),
@@ -137,6 +135,7 @@ impl Inventory {
         item_id: Uuid,
         correlation_id: Uuid,
         clock: &dyn Clock,
+        rng: &mut dyn DeterministicRng,
     ) -> Result<(), DomainError> {
         if !self.items.contains(&item_id) {
             return Err(DomainError::Validation(format!(
@@ -144,11 +143,9 @@ impl Inventory {
                 self.id
             )));
         }
-        // TODO: event_id uses Uuid::new_v4() which breaks replay determinism.
-        // See TODO on `add_item()` for details.
         let event = InventoryEvent {
             metadata: EventMetadata {
-                event_id: Uuid::new_v4(),
+                event_id: rng.next_uuid(),
                 event_type: ITEM_EQUIPPED_EVENT_TYPE.to_owned(),
                 aggregate_id: self.id,
                 sequence_number: self.next_sequence_number(),
@@ -171,17 +168,20 @@ impl Inventory {
     /// # Errors
     ///
     /// Returns `DomainError::Validation` if the inventory is already archived.
-    pub fn archive(&mut self, correlation_id: Uuid, clock: &dyn Clock) -> Result<(), DomainError> {
+    pub fn archive(
+        &mut self,
+        correlation_id: Uuid,
+        clock: &dyn Clock,
+        rng: &mut dyn DeterministicRng,
+    ) -> Result<(), DomainError> {
         if self.archived {
             return Err(DomainError::Validation(
                 "inventory is already archived".into(),
             ));
         }
-        // TODO: event_id uses Uuid::new_v4() which breaks replay determinism.
-        // See TODO on `add_item()` for details.
         let event = InventoryEvent {
             metadata: EventMetadata {
-                event_id: Uuid::new_v4(),
+                event_id: rng.next_uuid(),
                 event_type: INVENTORY_ARCHIVED_EVENT_TYPE.to_owned(),
                 aggregate_id: self.id,
                 sequence_number: self.next_sequence_number(),
@@ -241,7 +241,7 @@ mod tests {
     use chrono::{TimeZone, Utc};
     use otherworlds_core::aggregate::AggregateRoot;
     use otherworlds_core::event::DomainEvent;
-    use otherworlds_test_support::FixedClock;
+    use otherworlds_test_support::{FixedClock, MockRng};
 
     #[test]
     fn test_add_item_produces_item_added_event() {
@@ -254,7 +254,9 @@ mod tests {
         let mut inventory = Inventory::new(inventory_id);
 
         // Act
-        inventory.add_item(item_id, correlation_id, &clock).unwrap();
+        inventory
+            .add_item(item_id, correlation_id, &clock, &mut MockRng)
+            .unwrap();
 
         // Assert
         let events = inventory.uncommitted_events();
@@ -290,14 +292,16 @@ mod tests {
         let mut inventory = Inventory::new(inventory_id);
 
         // Add the item once.
-        inventory.add_item(item_id, Uuid::new_v4(), &clock).unwrap();
+        inventory
+            .add_item(item_id, Uuid::new_v4(), &clock, &mut MockRng)
+            .unwrap();
         for event in inventory.uncommitted_events().to_vec() {
             inventory.apply(&event);
         }
         inventory.clear_uncommitted_events();
 
         // Act — try to add the same item again.
-        let result = inventory.add_item(item_id, correlation_id, &clock);
+        let result = inventory.add_item(item_id, correlation_id, &clock, &mut MockRng);
 
         // Assert
         assert!(result.is_err());
@@ -320,7 +324,9 @@ mod tests {
         let mut inventory = Inventory::new(inventory_id);
 
         // Add the item first so it can be removed.
-        inventory.add_item(item_id, Uuid::new_v4(), &clock).unwrap();
+        inventory
+            .add_item(item_id, Uuid::new_v4(), &clock, &mut MockRng)
+            .unwrap();
         for event in inventory.uncommitted_events().to_vec() {
             inventory.apply(&event);
         }
@@ -328,7 +334,7 @@ mod tests {
 
         // Act
         inventory
-            .remove_item(item_id, correlation_id, &clock)
+            .remove_item(item_id, correlation_id, &clock, &mut MockRng)
             .unwrap();
 
         // Assert
@@ -365,7 +371,7 @@ mod tests {
         let mut inventory = Inventory::new(inventory_id);
 
         // Act
-        let result = inventory.remove_item(item_id, correlation_id, &clock);
+        let result = inventory.remove_item(item_id, correlation_id, &clock, &mut MockRng);
 
         // Assert
         assert!(result.is_err());
@@ -388,7 +394,9 @@ mod tests {
         let mut inventory = Inventory::new(inventory_id);
 
         // Add the item first so it can be equipped.
-        inventory.add_item(item_id, Uuid::new_v4(), &clock).unwrap();
+        inventory
+            .add_item(item_id, Uuid::new_v4(), &clock, &mut MockRng)
+            .unwrap();
         for event in inventory.uncommitted_events().to_vec() {
             inventory.apply(&event);
         }
@@ -396,7 +404,7 @@ mod tests {
 
         // Act
         inventory
-            .equip_item(item_id, correlation_id, &clock)
+            .equip_item(item_id, correlation_id, &clock, &mut MockRng)
             .unwrap();
 
         // Assert
@@ -433,7 +441,7 @@ mod tests {
         let mut inventory = Inventory::new(inventory_id);
 
         // Act
-        let result = inventory.equip_item(item_id, correlation_id, &clock);
+        let result = inventory.equip_item(item_id, correlation_id, &clock, &mut MockRng);
 
         // Assert
         assert!(result.is_err());
@@ -455,7 +463,9 @@ mod tests {
         let mut inventory = Inventory::new(inventory_id);
 
         // Act
-        inventory.archive(correlation_id, &clock).unwrap();
+        inventory
+            .archive(correlation_id, &clock, &mut MockRng)
+            .unwrap();
 
         // Assert
         let events = inventory.uncommitted_events();
@@ -489,14 +499,16 @@ mod tests {
         let mut inventory = Inventory::new(inventory_id);
 
         // Archive once.
-        inventory.archive(Uuid::new_v4(), &clock).unwrap();
+        inventory
+            .archive(Uuid::new_v4(), &clock, &mut MockRng)
+            .unwrap();
         for event in inventory.uncommitted_events().to_vec() {
             inventory.apply(&event);
         }
         inventory.clear_uncommitted_events();
 
         // Act — try to archive again.
-        let result = inventory.archive(correlation_id, &clock);
+        let result = inventory.archive(correlation_id, &clock, &mut MockRng);
 
         // Assert
         assert!(result.is_err());

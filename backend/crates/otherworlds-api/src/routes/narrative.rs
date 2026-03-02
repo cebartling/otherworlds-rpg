@@ -55,6 +55,7 @@ async fn advance_beat(
     let stored_events = command_handlers::handle_advance_beat(
         &command,
         state.clock.as_ref(),
+        &*state.rng,
         &*state.event_repository,
     )
     .await?;
@@ -80,6 +81,7 @@ async fn present_choice(
     let stored_events = command_handlers::handle_present_choice(
         &command,
         state.clock.as_ref(),
+        &*state.rng,
         &*state.event_repository,
     )
     .await?;
@@ -114,6 +116,7 @@ async fn archive_session(
     let stored_events = command_handlers::handle_archive_session(
         &command,
         state.clock.as_ref(),
+        &*state.rng,
         &*state.event_repository,
     )
     .await?;

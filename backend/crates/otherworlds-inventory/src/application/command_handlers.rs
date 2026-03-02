@@ -3,11 +3,14 @@
 //! This module contains application-level command handler functions that
 //! orchestrate domain logic: load aggregate, execute command, persist events.
 
+use std::sync::Mutex;
+
 use otherworlds_core::aggregate::AggregateRoot;
 use otherworlds_core::clock::Clock;
 use otherworlds_core::error::DomainError;
 use otherworlds_core::event::DomainEvent;
 use otherworlds_core::repository::{EventRepository, StoredEvent};
+use otherworlds_core::rng::DeterministicRng;
 use uuid::Uuid;
 
 use crate::domain::aggregates::Inventory;
@@ -78,6 +81,7 @@ pub(crate) fn reconstitute(
 pub async fn handle_add_item(
     command: &AddItem,
     clock: &dyn Clock,
+    rng: &Mutex<dyn DeterministicRng + Send>,
     repo: &dyn EventRepository,
 ) -> Result<InventoryCommandResult, DomainError> {
     let existing_events = repo.load_events(command.inventory_id).await?;
@@ -90,7 +94,17 @@ pub async fn handle_add_item(
         return Err(DomainError::Validation("inventory is archived".into()));
     }
 
-    inventory.add_item(command.item_id, command.correlation_id, clock)?;
+    {
+        let mut rng_guard = rng
+            .lock()
+            .map_err(|e| DomainError::Infrastructure(format!("RNG mutex poisoned: {e}")))?;
+        inventory.add_item(
+            command.item_id,
+            command.correlation_id,
+            clock,
+            &mut *rng_guard,
+        )?;
+    }
 
     let stored_events: Vec<StoredEvent> = inventory
         .uncommitted_events()
@@ -116,6 +130,7 @@ pub async fn handle_add_item(
 pub async fn handle_remove_item(
     command: &RemoveItem,
     clock: &dyn Clock,
+    rng: &Mutex<dyn DeterministicRng + Send>,
     repo: &dyn EventRepository,
 ) -> Result<InventoryCommandResult, DomainError> {
     let existing_events = repo.load_events(command.inventory_id).await?;
@@ -128,7 +143,17 @@ pub async fn handle_remove_item(
         return Err(DomainError::Validation("inventory is archived".into()));
     }
 
-    inventory.remove_item(command.item_id, command.correlation_id, clock)?;
+    {
+        let mut rng_guard = rng
+            .lock()
+            .map_err(|e| DomainError::Infrastructure(format!("RNG mutex poisoned: {e}")))?;
+        inventory.remove_item(
+            command.item_id,
+            command.correlation_id,
+            clock,
+            &mut *rng_guard,
+        )?;
+    }
 
     let stored_events: Vec<StoredEvent> = inventory
         .uncommitted_events()
@@ -154,6 +179,7 @@ pub async fn handle_remove_item(
 pub async fn handle_equip_item(
     command: &EquipItem,
     clock: &dyn Clock,
+    rng: &Mutex<dyn DeterministicRng + Send>,
     repo: &dyn EventRepository,
 ) -> Result<InventoryCommandResult, DomainError> {
     let existing_events = repo.load_events(command.inventory_id).await?;
@@ -166,7 +192,17 @@ pub async fn handle_equip_item(
         return Err(DomainError::Validation("inventory is archived".into()));
     }
 
-    inventory.equip_item(command.item_id, command.correlation_id, clock)?;
+    {
+        let mut rng_guard = rng
+            .lock()
+            .map_err(|e| DomainError::Infrastructure(format!("RNG mutex poisoned: {e}")))?;
+        inventory.equip_item(
+            command.item_id,
+            command.correlation_id,
+            clock,
+            &mut *rng_guard,
+        )?;
+    }
 
     let stored_events: Vec<StoredEvent> = inventory
         .uncommitted_events()
@@ -192,6 +228,7 @@ pub async fn handle_equip_item(
 pub async fn handle_archive_inventory(
     command: &ArchiveInventory,
     clock: &dyn Clock,
+    rng: &Mutex<dyn DeterministicRng + Send>,
     repo: &dyn EventRepository,
 ) -> Result<InventoryCommandResult, DomainError> {
     let existing_events = repo.load_events(command.inventory_id).await?;
@@ -200,7 +237,12 @@ pub async fn handle_archive_inventory(
     }
     let mut inventory = reconstitute(command.inventory_id, &existing_events)?;
 
-    inventory.archive(command.correlation_id, clock)?;
+    {
+        let mut rng_guard = rng
+            .lock()
+            .map_err(|e| DomainError::Infrastructure(format!("RNG mutex poisoned: {e}")))?;
+        inventory.archive(command.correlation_id, clock, &mut *rng_guard)?;
+    }
 
     let stored_events: Vec<StoredEvent> = inventory
         .uncommitted_events()
@@ -219,9 +261,12 @@ pub async fn handle_archive_inventory(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
     use chrono::{DateTime, TimeZone, Utc};
     use otherworlds_core::error::DomainError;
     use otherworlds_core::repository::StoredEvent;
+    use otherworlds_core::rng::DeterministicRng;
     use uuid::Uuid;
 
     use crate::application::command_handlers::{
@@ -232,7 +277,7 @@ mod tests {
         INVENTORY_ARCHIVED_EVENT_TYPE, ITEM_ADDED_EVENT_TYPE, ITEM_EQUIPPED_EVENT_TYPE,
         ITEM_REMOVED_EVENT_TYPE, InventoryArchived, InventoryEventKind, ItemAdded,
     };
-    use otherworlds_test_support::{FixedClock, RecordingEventRepository};
+    use otherworlds_test_support::{FixedClock, MockRng, RecordingEventRepository};
 
     fn dummy_stored_event(
         aggregate_id: Uuid,
@@ -264,6 +309,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let existing_event = dummy_stored_event(inventory_id, existing_item_id, fixed_now);
         let repo = RecordingEventRepository::new(Ok(vec![existing_event]));
 
@@ -274,7 +320,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_add_item(&command, &clock, &repo).await;
+        let result = handle_add_item(&command, &clock, &*rng, &repo).await;
 
         // Assert
         let cmd_result = result.unwrap();
@@ -315,6 +361,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let existing_event = dummy_stored_event(inventory_id, item_id, fixed_now);
         let repo = RecordingEventRepository::new(Ok(vec![existing_event]));
 
@@ -325,7 +372,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_remove_item(&command, &clock, &repo).await;
+        let result = handle_remove_item(&command, &clock, &*rng, &repo).await;
 
         // Assert
         let cmd_result = result.unwrap();
@@ -366,6 +413,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let existing_event = dummy_stored_event(inventory_id, item_id, fixed_now);
         let repo = RecordingEventRepository::new(Ok(vec![existing_event]));
 
@@ -376,7 +424,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_equip_item(&command, &clock, &repo).await;
+        let result = handle_equip_item(&command, &clock, &*rng, &repo).await;
 
         // Assert
         let cmd_result = result.unwrap();
@@ -417,6 +465,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let repo = RecordingEventRepository::new(Ok(Vec::new()));
 
         let command = AddItem {
@@ -426,7 +475,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_add_item(&command, &clock, &repo).await;
+        let result = handle_add_item(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());
@@ -444,6 +493,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let repo = RecordingEventRepository::new(Ok(Vec::new()));
 
         let command = RemoveItem {
@@ -453,7 +503,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_remove_item(&command, &clock, &repo).await;
+        let result = handle_remove_item(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());
@@ -471,6 +521,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let existing_event = dummy_stored_event(inventory_id, item_id, fixed_now);
         let repo = RecordingEventRepository::new(Ok(vec![existing_event]));
 
@@ -481,7 +532,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_add_item(&command, &clock, &repo).await;
+        let result = handle_add_item(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());
@@ -502,6 +553,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let existing_event = dummy_stored_event(inventory_id, existing_item_id, fixed_now);
         let repo = RecordingEventRepository::new(Ok(vec![existing_event]));
 
@@ -512,7 +564,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_remove_item(&command, &clock, &repo).await;
+        let result = handle_remove_item(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());
@@ -533,6 +585,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let existing_event = dummy_stored_event(inventory_id, existing_item_id, fixed_now);
         let repo = RecordingEventRepository::new(Ok(vec![existing_event]));
 
@@ -543,7 +596,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_equip_item(&command, &clock, &repo).await;
+        let result = handle_equip_item(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());
@@ -563,6 +616,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let repo = RecordingEventRepository::new(Ok(Vec::new()));
 
         let command = EquipItem {
@@ -572,7 +626,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_equip_item(&command, &clock, &repo).await;
+        let result = handle_equip_item(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());
@@ -612,6 +666,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let existing_event = dummy_stored_event(inventory_id, item_id, fixed_now);
         let repo = RecordingEventRepository::new(Ok(vec![existing_event]));
 
@@ -621,7 +676,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_archive_inventory(&command, &clock, &repo).await;
+        let result = handle_archive_inventory(&command, &clock, &*rng, &repo).await;
 
         // Assert
         let cmd_result = result.unwrap();
@@ -660,6 +715,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let repo = RecordingEventRepository::new(Ok(Vec::new()));
 
         let command = ArchiveInventory {
@@ -668,7 +724,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_archive_inventory(&command, &clock, &repo).await;
+        let result = handle_archive_inventory(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());
@@ -686,6 +742,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let item_event = dummy_stored_event(inventory_id, item_id, fixed_now);
         let archived_event = dummy_archived_event(inventory_id, fixed_now, 2);
         let repo = RecordingEventRepository::new(Ok(vec![item_event, archived_event]));
@@ -696,7 +753,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_archive_inventory(&command, &clock, &repo).await;
+        let result = handle_archive_inventory(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());
@@ -717,6 +774,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let item_event = dummy_stored_event(inventory_id, item_id, fixed_now);
         let archived_event = dummy_archived_event(inventory_id, fixed_now, 2);
         let repo = RecordingEventRepository::new(Ok(vec![item_event, archived_event]));
@@ -728,7 +786,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_add_item(&command, &clock, &repo).await;
+        let result = handle_add_item(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());
@@ -748,6 +806,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let item_event = dummy_stored_event(inventory_id, item_id, fixed_now);
         let archived_event = dummy_archived_event(inventory_id, fixed_now, 2);
         let repo = RecordingEventRepository::new(Ok(vec![item_event, archived_event]));
@@ -759,7 +818,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_remove_item(&command, &clock, &repo).await;
+        let result = handle_remove_item(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());
@@ -779,6 +838,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let item_event = dummy_stored_event(inventory_id, item_id, fixed_now);
         let archived_event = dummy_archived_event(inventory_id, fixed_now, 2);
         let repo = RecordingEventRepository::new(Ok(vec![item_event, archived_event]));
@@ -790,7 +850,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_equip_item(&command, &clock, &repo).await;
+        let result = handle_equip_item(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());

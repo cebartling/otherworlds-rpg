@@ -3,11 +3,14 @@
 //! This module contains application-level command handler functions that
 //! orchestrate domain logic: load aggregate, execute command, persist events.
 
+use std::sync::Mutex;
+
 use otherworlds_core::aggregate::AggregateRoot;
 use otherworlds_core::clock::Clock;
 use otherworlds_core::error::DomainError;
 use otherworlds_core::event::DomainEvent;
 use otherworlds_core::repository::{EventRepository, StoredEvent};
+use otherworlds_core::rng::DeterministicRng;
 use uuid::Uuid;
 
 use crate::domain::aggregates::NarrativeSession;
@@ -69,6 +72,7 @@ pub(crate) fn reconstitute(
 pub async fn handle_advance_beat(
     command: &AdvanceBeat,
     clock: &dyn Clock,
+    rng: &Mutex<dyn DeterministicRng + Send>,
     repo: &dyn EventRepository,
 ) -> Result<Vec<StoredEvent>, DomainError> {
     let existing_events = repo.load_events(command.session_id).await?;
@@ -78,7 +82,12 @@ pub async fn handle_advance_beat(
         return Err(DomainError::Validation("session is archived".into()));
     }
 
-    session.advance_beat(command.correlation_id, clock);
+    {
+        let mut rng_guard = rng
+            .lock()
+            .map_err(|e| DomainError::Infrastructure(format!("RNG mutex poisoned: {e}")))?;
+        session.advance_beat(command.correlation_id, clock, &mut *rng_guard);
+    }
 
     let stored_events: Vec<StoredEvent> = session
         .uncommitted_events()
@@ -101,6 +110,7 @@ pub async fn handle_advance_beat(
 pub async fn handle_present_choice(
     command: &PresentChoice,
     clock: &dyn Clock,
+    rng: &Mutex<dyn DeterministicRng + Send>,
     repo: &dyn EventRepository,
 ) -> Result<Vec<StoredEvent>, DomainError> {
     let existing_events = repo.load_events(command.session_id).await?;
@@ -110,7 +120,12 @@ pub async fn handle_present_choice(
         return Err(DomainError::Validation("session is archived".into()));
     }
 
-    session.present_choice(command.correlation_id, clock);
+    {
+        let mut rng_guard = rng
+            .lock()
+            .map_err(|e| DomainError::Infrastructure(format!("RNG mutex poisoned: {e}")))?;
+        session.present_choice(command.correlation_id, clock, &mut *rng_guard);
+    }
 
     let stored_events: Vec<StoredEvent> = session
         .uncommitted_events()
@@ -135,6 +150,7 @@ pub async fn handle_present_choice(
 pub async fn handle_archive_session(
     command: &ArchiveSession,
     clock: &dyn Clock,
+    rng: &Mutex<dyn DeterministicRng + Send>,
     repo: &dyn EventRepository,
 ) -> Result<Vec<StoredEvent>, DomainError> {
     let existing_events = repo.load_events(command.session_id).await?;
@@ -143,7 +159,12 @@ pub async fn handle_archive_session(
     }
     let mut session = reconstitute(command.session_id, &existing_events)?;
 
-    session.archive(command.correlation_id, clock)?;
+    {
+        let mut rng_guard = rng
+            .lock()
+            .map_err(|e| DomainError::Infrastructure(format!("RNG mutex poisoned: {e}")))?;
+        session.archive(command.correlation_id, clock, &mut *rng_guard)?;
+    }
 
     let stored_events: Vec<StoredEvent> = session
         .uncommitted_events()
@@ -170,7 +191,9 @@ mod tests {
     };
     use crate::domain::commands::{AdvanceBeat, ArchiveSession, PresentChoice};
     use crate::domain::events::{BeatAdvanced, NarrativeEventKind};
-    use otherworlds_test_support::{FixedClock, RecordingEventRepository};
+    use otherworlds_core::rng::DeterministicRng;
+    use otherworlds_test_support::{FixedClock, MockRng, RecordingEventRepository};
+    use std::sync::{Arc, Mutex};
 
     fn beat_advanced_event(session_id: Uuid, fixed_now: chrono::DateTime<Utc>) -> StoredEvent {
         StoredEvent {
@@ -196,6 +219,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let repo = RecordingEventRepository::new(Ok(Vec::new()));
 
         let command = AdvanceBeat {
@@ -204,7 +228,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_advance_beat(&command, &clock, &repo).await;
+        let result = handle_advance_beat(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_ok());
@@ -233,6 +257,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let repo = RecordingEventRepository::new(Ok(Vec::new()));
 
         let command = PresentChoice {
@@ -241,7 +266,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_present_choice(&command, &clock, &repo).await;
+        let result = handle_present_choice(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_ok());
@@ -270,6 +295,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let existing = vec![beat_advanced_event(session_id, fixed_now)];
         let repo = RecordingEventRepository::new(Ok(existing));
 
@@ -279,7 +305,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_archive_session(&command, &clock, &repo).await;
+        let result = handle_archive_session(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_ok());
@@ -305,6 +331,7 @@ mod tests {
     async fn test_handle_archive_session_rejects_not_found() {
         // Arrange
         let clock = FixedClock(Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap());
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let repo = RecordingEventRepository::new(Ok(Vec::new()));
         let session_id = Uuid::new_v4();
 
@@ -314,7 +341,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_archive_session(&command, &clock, &repo).await;
+        let result = handle_archive_session(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());
@@ -347,13 +374,15 @@ mod tests {
         let existing = vec![beat_advanced_event(session_id, fixed_now), archived_event];
         let repo = RecordingEventRepository::new(Ok(existing));
 
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
+
         let command = ArchiveSession {
             correlation_id: Uuid::new_v4(),
             session_id,
         };
 
         // Act
-        let result = handle_archive_session(&command, &clock, &repo).await;
+        let result = handle_archive_session(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());
@@ -388,13 +417,15 @@ mod tests {
         let existing = vec![beat_advanced_event(session_id, fixed_now), archived_event];
         let repo = RecordingEventRepository::new(Ok(existing));
 
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
+
         let command = AdvanceBeat {
             correlation_id: Uuid::new_v4(),
             session_id,
         };
 
         // Act
-        let result = handle_advance_beat(&command, &clock, &repo).await;
+        let result = handle_advance_beat(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());
@@ -429,13 +460,15 @@ mod tests {
         let existing = vec![beat_advanced_event(session_id, fixed_now), archived_event];
         let repo = RecordingEventRepository::new(Ok(existing));
 
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
+
         let command = PresentChoice {
             correlation_id: Uuid::new_v4(),
             session_id,
         };
 
         // Act
-        let result = handle_present_choice(&command, &clock, &repo).await;
+        let result = handle_present_choice(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());

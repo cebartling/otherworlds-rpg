@@ -3,11 +3,14 @@
 //! This module contains application-level command handler functions that
 //! orchestrate domain logic: load aggregate, execute command, persist events.
 
+use std::sync::Mutex;
+
 use otherworlds_core::aggregate::AggregateRoot;
 use otherworlds_core::clock::Clock;
 use otherworlds_core::error::DomainError;
 use otherworlds_core::event::DomainEvent;
 use otherworlds_core::repository::{EventRepository, StoredEvent};
+use otherworlds_core::rng::DeterministicRng;
 use uuid::Uuid;
 
 use crate::domain::aggregates::Campaign;
@@ -80,12 +83,28 @@ pub(crate) fn reconstitute(
 pub async fn handle_ingest_campaign(
     command: &IngestCampaign,
     clock: &dyn Clock,
+    rng: &Mutex<dyn DeterministicRng + Send>,
     repo: &dyn EventRepository,
 ) -> Result<ContentCommandResult, DomainError> {
-    let campaign_id = Uuid::new_v4();
+    let campaign_id = {
+        let mut rng_guard = rng
+            .lock()
+            .map_err(|e| DomainError::Infrastructure(format!("RNG mutex poisoned: {e}")))?;
+        rng_guard.next_uuid()
+    };
     let mut campaign = Campaign::new(campaign_id);
 
-    campaign.ingest_campaign(&command.source, command.correlation_id, clock)?;
+    {
+        let mut rng_guard = rng
+            .lock()
+            .map_err(|e| DomainError::Infrastructure(format!("RNG mutex poisoned: {e}")))?;
+        campaign.ingest_campaign(
+            &command.source,
+            command.correlation_id,
+            clock,
+            &mut *rng_guard,
+        )?;
+    }
 
     let stored_events: Vec<StoredEvent> = campaign
         .uncommitted_events()
@@ -111,6 +130,7 @@ pub async fn handle_ingest_campaign(
 pub async fn handle_validate_campaign(
     command: &ValidateCampaign,
     clock: &dyn Clock,
+    rng: &Mutex<dyn DeterministicRng + Send>,
     repo: &dyn EventRepository,
 ) -> Result<ContentCommandResult, DomainError> {
     let existing_events = repo.load_events(command.campaign_id).await?;
@@ -122,7 +142,12 @@ pub async fn handle_validate_campaign(
         return Err(DomainError::Validation("campaign is archived".into()));
     }
 
-    campaign.validate_campaign(command.correlation_id, clock)?;
+    {
+        let mut rng_guard = rng
+            .lock()
+            .map_err(|e| DomainError::Infrastructure(format!("RNG mutex poisoned: {e}")))?;
+        campaign.validate_campaign(command.correlation_id, clock, &mut *rng_guard)?;
+    }
 
     let stored_events: Vec<StoredEvent> = campaign
         .uncommitted_events()
@@ -148,6 +173,7 @@ pub async fn handle_validate_campaign(
 pub async fn handle_compile_campaign(
     command: &CompileCampaign,
     clock: &dyn Clock,
+    rng: &Mutex<dyn DeterministicRng + Send>,
     repo: &dyn EventRepository,
 ) -> Result<ContentCommandResult, DomainError> {
     let existing_events = repo.load_events(command.campaign_id).await?;
@@ -159,7 +185,12 @@ pub async fn handle_compile_campaign(
         return Err(DomainError::Validation("campaign is archived".into()));
     }
 
-    campaign.compile_campaign(command.correlation_id, clock)?;
+    {
+        let mut rng_guard = rng
+            .lock()
+            .map_err(|e| DomainError::Infrastructure(format!("RNG mutex poisoned: {e}")))?;
+        campaign.compile_campaign(command.correlation_id, clock, &mut *rng_guard)?;
+    }
 
     let stored_events: Vec<StoredEvent> = campaign
         .uncommitted_events()
@@ -186,6 +217,7 @@ pub async fn handle_compile_campaign(
 pub async fn handle_archive_campaign(
     command: &ArchiveCampaign,
     clock: &dyn Clock,
+    rng: &Mutex<dyn DeterministicRng + Send>,
     repo: &dyn EventRepository,
 ) -> Result<ContentCommandResult, DomainError> {
     let existing_events = repo.load_events(command.campaign_id).await?;
@@ -194,7 +226,12 @@ pub async fn handle_archive_campaign(
     }
     let mut campaign = reconstitute(command.campaign_id, &existing_events)?;
 
-    campaign.archive(command.correlation_id, clock)?;
+    {
+        let mut rng_guard = rng
+            .lock()
+            .map_err(|e| DomainError::Infrastructure(format!("RNG mutex poisoned: {e}")))?;
+        campaign.archive(command.correlation_id, clock, &mut *rng_guard)?;
+    }
 
     let stored_events: Vec<StoredEvent> = campaign
         .uncommitted_events()
@@ -213,9 +250,12 @@ pub async fn handle_archive_campaign(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
     use chrono::{DateTime, TimeZone, Utc};
     use otherworlds_core::error::DomainError;
     use otherworlds_core::repository::StoredEvent;
+    use otherworlds_core::rng::DeterministicRng;
     use uuid::Uuid;
 
     use crate::application::command_handlers::{
@@ -230,7 +270,7 @@ mod tests {
         CAMPAIGN_VALIDATED_EVENT_TYPE, CampaignArchived, CampaignIngested, CampaignValidated,
         ContentEventKind,
     };
-    use otherworlds_test_support::{FixedClock, RecordingEventRepository};
+    use otherworlds_test_support::{FixedClock, MockRng, RecordingEventRepository};
 
     fn dummy_ingested_event(aggregate_id: Uuid, fixed_now: DateTime<Utc>) -> StoredEvent {
         StoredEvent {
@@ -287,6 +327,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let repo = RecordingEventRepository::new(Ok(Vec::new()));
 
         let command = IngestCampaign {
@@ -295,7 +336,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_ingest_campaign(&command, &clock, &repo).await;
+        let result = handle_ingest_campaign(&command, &clock, &*rng, &repo).await;
 
         // Assert
         let cmd_result = result.unwrap();
@@ -325,6 +366,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let existing_event = dummy_ingested_event(campaign_id, fixed_now);
         let repo = RecordingEventRepository::new(Ok(vec![existing_event]));
 
@@ -334,7 +376,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_validate_campaign(&command, &clock, &repo).await;
+        let result = handle_validate_campaign(&command, &clock, &*rng, &repo).await;
 
         // Assert
         let cmd_result = result.unwrap();
@@ -365,6 +407,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let ingested = dummy_ingested_event(campaign_id, fixed_now);
         let validated = dummy_validated_event(campaign_id, fixed_now);
         let repo = RecordingEventRepository::new(Ok(vec![ingested, validated]));
@@ -375,7 +418,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_compile_campaign(&command, &clock, &repo).await;
+        let result = handle_compile_campaign(&command, &clock, &*rng, &repo).await;
 
         // Assert
         let cmd_result = result.unwrap();
@@ -406,6 +449,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let repo = RecordingEventRepository::new(Ok(Vec::new()));
 
         let command = ValidateCampaign {
@@ -414,7 +458,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_validate_campaign(&command, &clock, &repo).await;
+        let result = handle_validate_campaign(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());
@@ -431,6 +475,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let repo = RecordingEventRepository::new(Ok(Vec::new()));
 
         let command = CompileCampaign {
@@ -439,7 +484,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_compile_campaign(&command, &clock, &repo).await;
+        let result = handle_compile_campaign(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());
@@ -456,6 +501,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let ingested = dummy_ingested_event(campaign_id, fixed_now);
         let repo = RecordingEventRepository::new(Ok(vec![ingested]));
 
@@ -465,7 +511,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_compile_campaign(&command, &clock, &repo).await;
+        let result = handle_compile_campaign(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());
@@ -484,6 +530,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let ingested = dummy_ingested_event(campaign_id, fixed_now);
         let repo = RecordingEventRepository::new(Ok(vec![ingested]));
 
@@ -493,7 +540,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_archive_campaign(&command, &clock, &repo).await;
+        let result = handle_archive_campaign(&command, &clock, &*rng, &repo).await;
 
         // Assert
         let cmd_result = result.unwrap();
@@ -524,6 +571,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let repo = RecordingEventRepository::new(Ok(Vec::new()));
 
         let command = ArchiveCampaign {
@@ -532,7 +580,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_archive_campaign(&command, &clock, &repo).await;
+        let result = handle_archive_campaign(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());
@@ -549,6 +597,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let ingested = dummy_ingested_event(campaign_id, fixed_now);
         let archived = dummy_archived_event(campaign_id, fixed_now);
         let repo = RecordingEventRepository::new(Ok(vec![ingested, archived]));
@@ -559,7 +608,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_archive_campaign(&command, &clock, &repo).await;
+        let result = handle_archive_campaign(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());
@@ -578,6 +627,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let ingested = dummy_ingested_event(campaign_id, fixed_now);
         let archived = dummy_archived_event(campaign_id, fixed_now);
         let repo = RecordingEventRepository::new(Ok(vec![ingested, archived]));
@@ -588,7 +638,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_validate_campaign(&command, &clock, &repo).await;
+        let result = handle_validate_campaign(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());
@@ -607,6 +657,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let ingested = dummy_ingested_event(campaign_id, fixed_now);
         let validated = dummy_validated_event(campaign_id, fixed_now);
         let archived = dummy_archived_event(campaign_id, fixed_now);
@@ -618,7 +669,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_compile_campaign(&command, &clock, &repo).await;
+        let result = handle_compile_campaign(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());

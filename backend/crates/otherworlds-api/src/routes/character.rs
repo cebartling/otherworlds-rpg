@@ -67,6 +67,7 @@ async fn create_character(
     let stored_events = command_handlers::handle_create_character(
         &command,
         state.clock.as_ref(),
+        &state.rng,
         &*state.event_repository,
     )
     .await?;
@@ -94,6 +95,7 @@ async fn modify_attribute(
     let stored_events = command_handlers::handle_modify_attribute(
         &command,
         state.clock.as_ref(),
+        &state.rng,
         &*state.event_repository,
     )
     .await?;
@@ -120,6 +122,7 @@ async fn award_experience(
     let stored_events = command_handlers::handle_award_experience(
         &command,
         state.clock.as_ref(),
+        &state.rng,
         &*state.event_repository,
     )
     .await?;
@@ -154,6 +157,7 @@ async fn archive_character(
     let stored_events = command_handlers::handle_archive_character(
         &command,
         state.clock.as_ref(),
+        &state.rng,
         &*state.event_repository,
     )
     .await?;

@@ -73,6 +73,7 @@ pub(crate) fn reconstitute(
 pub async fn handle_declare_intent(
     command: &DeclareIntent,
     clock: &dyn Clock,
+    rng: &Mutex<dyn DeterministicRng + Send>,
     repo: &dyn EventRepository,
 ) -> Result<Vec<StoredEvent>, DomainError> {
     let existing_events = repo.load_events(command.resolution_id).await?;
@@ -82,18 +83,24 @@ pub async fn handle_declare_intent(
         return Err(DomainError::Validation("resolution is archived".into()));
     }
 
-    resolution.declare_intent(
-        DeclareIntentParams {
-            intent_id: command.intent_id,
-            action_type: command.action_type.clone(),
-            skill: command.skill.clone(),
-            target_id: command.target_id,
-            difficulty_class: command.difficulty_class,
-            modifier: command.modifier,
-        },
-        command.correlation_id,
-        clock,
-    )?;
+    {
+        let mut rng_guard = rng
+            .lock()
+            .map_err(|e| DomainError::Infrastructure(format!("RNG mutex poisoned: {e}")))?;
+        resolution.declare_intent(
+            DeclareIntentParams {
+                intent_id: command.intent_id,
+                action_type: command.action_type.clone(),
+                skill: command.skill.clone(),
+                target_id: command.target_id,
+                difficulty_class: command.difficulty_class,
+                modifier: command.modifier,
+            },
+            command.correlation_id,
+            clock,
+            &mut *rng_guard,
+        )?;
+    }
 
     let stored_events: Vec<StoredEvent> = resolution
         .uncommitted_events()
@@ -158,6 +165,7 @@ pub async fn handle_resolve_check(
 pub async fn handle_produce_effects(
     command: &ProduceEffects,
     clock: &dyn Clock,
+    rng: &Mutex<dyn DeterministicRng + Send>,
     repo: &dyn EventRepository,
 ) -> Result<Vec<StoredEvent>, DomainError> {
     let existing_events = repo.load_events(command.resolution_id).await?;
@@ -174,7 +182,12 @@ pub async fn handle_produce_effects(
         .map(EffectSpec::into_resolved_effect)
         .collect();
 
-    resolution.produce_effects(effects, command.correlation_id, clock)?;
+    {
+        let mut rng_guard = rng
+            .lock()
+            .map_err(|e| DomainError::Infrastructure(format!("RNG mutex poisoned: {e}")))?;
+        resolution.produce_effects(effects, command.correlation_id, clock, &mut *rng_guard)?;
+    }
 
     let stored_events: Vec<StoredEvent> = resolution
         .uncommitted_events()
@@ -199,6 +212,7 @@ pub async fn handle_produce_effects(
 pub async fn handle_archive_resolution(
     command: &ArchiveResolution,
     clock: &dyn Clock,
+    rng: &Mutex<dyn DeterministicRng + Send>,
     repo: &dyn EventRepository,
 ) -> Result<Vec<StoredEvent>, DomainError> {
     let existing_events = repo.load_events(command.resolution_id).await?;
@@ -207,7 +221,12 @@ pub async fn handle_archive_resolution(
     }
     let mut resolution = reconstitute(command.resolution_id, &existing_events)?;
 
-    resolution.archive(command.correlation_id, clock)?;
+    {
+        let mut rng_guard = rng
+            .lock()
+            .map_err(|e| DomainError::Infrastructure(format!("RNG mutex poisoned: {e}")))?;
+        resolution.archive(command.correlation_id, clock, &mut *rng_guard)?;
+    }
 
     let stored_events: Vec<StoredEvent> = resolution
         .uncommitted_events()
@@ -241,7 +260,7 @@ mod tests {
         CheckOutcome, CheckResolved, IntentDeclared, ResolutionArchived, RulesEventKind,
     };
     use otherworlds_test_support::{
-        EmptyEventRepository, FixedClock, RecordingEventRepository, SequenceRng,
+        EmptyEventRepository, FixedClock, MockRng, RecordingEventRepository, SequenceRng,
     };
 
     fn fixed_clock() -> FixedClock {
@@ -267,7 +286,10 @@ mod tests {
             modifier: 3,
         };
 
-        let result = handle_declare_intent(&command, &clock, &repo).await;
+        let rng: Mutex<MockRng> = Mutex::new(MockRng);
+        let rng_ref: &Mutex<dyn DeterministicRng + Send> = &rng;
+
+        let result = handle_declare_intent(&command, &clock, rng_ref, &repo).await;
         assert!(result.is_ok());
 
         let appended = repo.appended_events();
@@ -323,7 +345,10 @@ mod tests {
             modifier: 0,
         };
 
-        let result = handle_declare_intent(&command, &fixed_clock(), &repo).await;
+        let rng: Mutex<MockRng> = Mutex::new(MockRng);
+        let rng_ref: &Mutex<dyn DeterministicRng + Send> = &rng;
+
+        let result = handle_declare_intent(&command, &fixed_clock(), rng_ref, &repo).await;
         assert!(result.is_err());
     }
 
@@ -354,8 +379,8 @@ mod tests {
             occurred_at: fixed_now,
         }];
         let repo = RecordingEventRepository::new(Ok(existing));
-        // RNG: d20 roll = 15, then four values for check_id
-        let rng: Mutex<SequenceRng> = Mutex::new(SequenceRng::new(vec![15, 42, 99, 7, 13]));
+        let rng: Mutex<SequenceRng> =
+            Mutex::new(SequenceRng::new(vec![15, 42, 99, 7, 13, 0, 0, 0, 0]));
         let rng_ref: &Mutex<dyn DeterministicRng + Send> = &rng;
 
         let command = ResolveCheck {
@@ -446,7 +471,10 @@ mod tests {
             }],
         };
 
-        let result = handle_produce_effects(&command, &fixed_clock(), &repo).await;
+        let rng: Mutex<MockRng> = Mutex::new(MockRng);
+        let rng_ref: &Mutex<dyn DeterministicRng + Send> = &rng;
+
+        let result = handle_produce_effects(&command, &fixed_clock(), rng_ref, &repo).await;
         assert!(result.is_ok());
 
         let appended = repo.appended_events();
@@ -465,7 +493,10 @@ mod tests {
             effects: vec![],
         };
 
-        let result = handle_produce_effects(&command, &fixed_clock(), &repo).await;
+        let rng: Mutex<MockRng> = Mutex::new(MockRng);
+        let rng_ref: &Mutex<dyn DeterministicRng + Send> = &rng;
+
+        let result = handle_produce_effects(&command, &fixed_clock(), rng_ref, &repo).await;
         assert!(result.is_err());
     }
 
@@ -692,7 +723,10 @@ mod tests {
             resolution_id,
         };
 
-        let result = handle_archive_resolution(&command, &clock, &repo).await;
+        let rng: Mutex<MockRng> = Mutex::new(MockRng);
+        let rng_ref: &Mutex<dyn DeterministicRng + Send> = &rng;
+
+        let result = handle_archive_resolution(&command, &clock, rng_ref, &repo).await;
         assert!(result.is_ok());
 
         let appended = repo.appended_events();
@@ -718,7 +752,10 @@ mod tests {
             resolution_id: Uuid::new_v4(),
         };
 
-        let result = handle_archive_resolution(&command, &fixed_clock(), &repo).await;
+        let rng: Mutex<MockRng> = Mutex::new(MockRng);
+        let rng_ref: &Mutex<dyn DeterministicRng + Send> = &rng;
+
+        let result = handle_archive_resolution(&command, &fixed_clock(), rng_ref, &repo).await;
         assert!(result.is_err());
         match result.unwrap_err() {
             DomainError::AggregateNotFound(_) => {}
@@ -740,7 +777,10 @@ mod tests {
             resolution_id,
         };
 
-        let result = handle_archive_resolution(&command, &fixed_clock(), &repo).await;
+        let rng: Mutex<MockRng> = Mutex::new(MockRng);
+        let rng_ref: &Mutex<dyn DeterministicRng + Send> = &rng;
+
+        let result = handle_archive_resolution(&command, &fixed_clock(), rng_ref, &repo).await;
         assert!(result.is_err());
         match result.unwrap_err() {
             DomainError::Validation(msg) => {
@@ -770,7 +810,10 @@ mod tests {
             modifier: 0,
         };
 
-        let result = handle_declare_intent(&command, &fixed_clock(), &repo).await;
+        let rng: Mutex<MockRng> = Mutex::new(MockRng);
+        let rng_ref: &Mutex<dyn DeterministicRng + Send> = &rng;
+
+        let result = handle_declare_intent(&command, &fixed_clock(), rng_ref, &repo).await;
         assert!(result.is_err());
         match result.unwrap_err() {
             DomainError::Validation(msg) => {
@@ -821,7 +864,10 @@ mod tests {
             effects: vec![],
         };
 
-        let result = handle_produce_effects(&command, &fixed_clock(), &repo).await;
+        let rng: Mutex<MockRng> = Mutex::new(MockRng);
+        let rng_ref: &Mutex<dyn DeterministicRng + Send> = &rng;
+
+        let result = handle_produce_effects(&command, &fixed_clock(), rng_ref, &repo).await;
         assert!(result.is_err());
         match result.unwrap_err() {
             DomainError::Validation(msg) => {

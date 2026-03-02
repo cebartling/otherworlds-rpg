@@ -3,11 +3,14 @@
 //! This module contains application-level command handler functions that
 //! orchestrate domain logic: load aggregate, execute command, persist events.
 
+use std::sync::Mutex;
+
 use otherworlds_core::aggregate::AggregateRoot;
 use otherworlds_core::clock::Clock;
 use otherworlds_core::error::DomainError;
 use otherworlds_core::event::DomainEvent;
 use otherworlds_core::repository::{EventRepository, StoredEvent};
+use otherworlds_core::rng::DeterministicRng;
 use uuid::Uuid;
 
 use crate::domain::aggregates::WorldSnapshot;
@@ -69,6 +72,7 @@ pub(crate) fn reconstitute(
 pub async fn handle_apply_effect(
     command: &ApplyEffect,
     clock: &dyn Clock,
+    rng: &Mutex<dyn DeterministicRng + Send>,
     repo: &dyn EventRepository,
 ) -> Result<Vec<StoredEvent>, DomainError> {
     if command.fact_key.trim().is_empty() {
@@ -82,7 +86,17 @@ pub async fn handle_apply_effect(
         return Err(DomainError::Validation("world snapshot is archived".into()));
     }
 
-    snapshot.apply_effect(command.fact_key.clone(), command.correlation_id, clock);
+    {
+        let mut rng_guard = rng
+            .lock()
+            .map_err(|e| DomainError::Infrastructure(format!("RNG mutex poisoned: {e}")))?;
+        snapshot.apply_effect(
+            command.fact_key.clone(),
+            command.correlation_id,
+            clock,
+            &mut *rng_guard,
+        );
+    }
 
     let stored_events: Vec<StoredEvent> = snapshot
         .uncommitted_events()
@@ -105,6 +119,7 @@ pub async fn handle_apply_effect(
 pub async fn handle_set_flag(
     command: &SetFlag,
     clock: &dyn Clock,
+    rng: &Mutex<dyn DeterministicRng + Send>,
     repo: &dyn EventRepository,
 ) -> Result<Vec<StoredEvent>, DomainError> {
     if command.flag_key.trim().is_empty() {
@@ -118,12 +133,18 @@ pub async fn handle_set_flag(
         return Err(DomainError::Validation("world snapshot is archived".into()));
     }
 
-    snapshot.set_flag(
-        command.flag_key.clone(),
-        command.value,
-        command.correlation_id,
-        clock,
-    );
+    {
+        let mut rng_guard = rng
+            .lock()
+            .map_err(|e| DomainError::Infrastructure(format!("RNG mutex poisoned: {e}")))?;
+        snapshot.set_flag(
+            command.flag_key.clone(),
+            command.value,
+            command.correlation_id,
+            clock,
+            &mut *rng_guard,
+        );
+    }
 
     let stored_events: Vec<StoredEvent> = snapshot
         .uncommitted_events()
@@ -146,6 +167,7 @@ pub async fn handle_set_flag(
 pub async fn handle_update_disposition(
     command: &UpdateDisposition,
     clock: &dyn Clock,
+    rng: &Mutex<dyn DeterministicRng + Send>,
     repo: &dyn EventRepository,
 ) -> Result<Vec<StoredEvent>, DomainError> {
     let existing_events = repo.load_events(command.world_id).await?;
@@ -155,7 +177,17 @@ pub async fn handle_update_disposition(
         return Err(DomainError::Validation("world snapshot is archived".into()));
     }
 
-    snapshot.update_disposition(command.entity_id, command.correlation_id, clock);
+    {
+        let mut rng_guard = rng
+            .lock()
+            .map_err(|e| DomainError::Infrastructure(format!("RNG mutex poisoned: {e}")))?;
+        snapshot.update_disposition(
+            command.entity_id,
+            command.correlation_id,
+            clock,
+            &mut *rng_guard,
+        );
+    }
 
     let stored_events: Vec<StoredEvent> = snapshot
         .uncommitted_events()
@@ -179,6 +211,7 @@ pub async fn handle_update_disposition(
 pub async fn handle_archive_world_snapshot(
     command: &ArchiveWorldSnapshot,
     clock: &dyn Clock,
+    rng: &Mutex<dyn DeterministicRng + Send>,
     repo: &dyn EventRepository,
 ) -> Result<Vec<StoredEvent>, DomainError> {
     let existing_events = repo.load_events(command.world_id).await?;
@@ -187,7 +220,12 @@ pub async fn handle_archive_world_snapshot(
     }
     let mut snapshot = reconstitute(command.world_id, &existing_events)?;
 
-    snapshot.archive(command.correlation_id, clock)?;
+    {
+        let mut rng_guard = rng
+            .lock()
+            .map_err(|e| DomainError::Infrastructure(format!("RNG mutex poisoned: {e}")))?;
+        snapshot.archive(command.correlation_id, clock, &mut *rng_guard)?;
+    }
 
     let stored_events: Vec<StoredEvent> = snapshot
         .uncommitted_events()
@@ -203,9 +241,12 @@ pub async fn handle_archive_world_snapshot(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
     use chrono::{TimeZone, Utc};
     use otherworlds_core::error::DomainError;
-    use otherworlds_test_support::{FixedClock, RecordingEventRepository};
+    use otherworlds_core::rng::DeterministicRng;
+    use otherworlds_test_support::{FixedClock, MockRng, RecordingEventRepository};
     use uuid::Uuid;
 
     use otherworlds_core::repository::StoredEvent;
@@ -224,6 +265,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let repo = RecordingEventRepository::new(Ok(Vec::new()));
 
         let command = ApplyEffect {
@@ -233,7 +275,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_apply_effect(&command, &clock, &repo).await;
+        let result = handle_apply_effect(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_ok());
@@ -271,6 +313,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let repo = RecordingEventRepository::new(Ok(Vec::new()));
 
         let command = SetFlag {
@@ -281,7 +324,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_set_flag(&command, &clock, &repo).await;
+        let result = handle_set_flag(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_ok());
@@ -321,6 +364,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let repo = RecordingEventRepository::new(Ok(Vec::new()));
 
         let command = UpdateDisposition {
@@ -330,7 +374,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_update_disposition(&command, &clock, &repo).await;
+        let result = handle_update_disposition(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_ok());
@@ -365,6 +409,7 @@ mod tests {
     async fn test_handle_apply_effect_rejects_empty_fact_key() {
         // Arrange
         let clock = FixedClock(Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap());
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let repo = RecordingEventRepository::new(Ok(Vec::new()));
 
         let command = ApplyEffect {
@@ -374,7 +419,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_apply_effect(&command, &clock, &repo).await;
+        let result = handle_apply_effect(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());
@@ -390,6 +435,7 @@ mod tests {
     async fn test_handle_set_flag_rejects_empty_flag_key() {
         // Arrange
         let clock = FixedClock(Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap());
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let repo = RecordingEventRepository::new(Ok(Vec::new()));
 
         let command = SetFlag {
@@ -400,7 +446,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_set_flag(&command, &clock, &repo).await;
+        let result = handle_set_flag(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());
@@ -455,6 +501,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
 
         // Provide a pre-existing event so the aggregate exists
         let existing = vec![StoredEvent {
@@ -481,7 +528,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_archive_world_snapshot(&command, &clock, &repo).await;
+        let result = handle_archive_world_snapshot(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_ok());
@@ -505,6 +552,7 @@ mod tests {
     async fn test_handle_archive_world_snapshot_returns_not_found_when_no_events() {
         // Arrange
         let clock = FixedClock(Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap());
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let repo = RecordingEventRepository::new(Ok(Vec::new()));
 
         let command = ArchiveWorldSnapshot {
@@ -513,7 +561,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_archive_world_snapshot(&command, &clock, &repo).await;
+        let result = handle_archive_world_snapshot(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());
@@ -528,6 +576,7 @@ mod tests {
         // Arrange
         let world_id = Uuid::new_v4();
         let clock = FixedClock(Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap());
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let repo = RecordingEventRepository::new(Ok(archived_world_snapshot_events(world_id)));
 
         let command = ArchiveWorldSnapshot {
@@ -536,7 +585,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_archive_world_snapshot(&command, &clock, &repo).await;
+        let result = handle_archive_world_snapshot(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());
@@ -553,6 +602,7 @@ mod tests {
         // Arrange
         let world_id = Uuid::new_v4();
         let clock = FixedClock(Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap());
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let repo = RecordingEventRepository::new(Ok(archived_world_snapshot_events(world_id)));
 
         let command = ApplyEffect {
@@ -562,7 +612,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_apply_effect(&command, &clock, &repo).await;
+        let result = handle_apply_effect(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());
@@ -579,6 +629,7 @@ mod tests {
         // Arrange
         let world_id = Uuid::new_v4();
         let clock = FixedClock(Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap());
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let repo = RecordingEventRepository::new(Ok(archived_world_snapshot_events(world_id)));
 
         let command = SetFlag {
@@ -589,7 +640,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_set_flag(&command, &clock, &repo).await;
+        let result = handle_set_flag(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());
@@ -606,6 +657,7 @@ mod tests {
         // Arrange
         let world_id = Uuid::new_v4();
         let clock = FixedClock(Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap());
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let repo = RecordingEventRepository::new(Ok(archived_world_snapshot_events(world_id)));
 
         let command = UpdateDisposition {
@@ -615,7 +667,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_update_disposition(&command, &clock, &repo).await;
+        let result = handle_update_disposition(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());

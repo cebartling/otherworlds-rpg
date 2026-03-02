@@ -71,6 +71,7 @@ async fn apply_effect(
     let stored_events = command_handlers::handle_apply_effect(
         &command,
         state.clock.as_ref(),
+        &state.rng,
         &*state.event_repository,
     )
     .await?;
@@ -95,9 +96,13 @@ async fn set_flag(
 
     info!(correlation_id = %command.correlation_id, "handling set_flag command");
 
-    let stored_events =
-        command_handlers::handle_set_flag(&command, state.clock.as_ref(), &*state.event_repository)
-            .await?;
+    let stored_events = command_handlers::handle_set_flag(
+        &command,
+        state.clock.as_ref(),
+        &state.rng,
+        &*state.event_repository,
+    )
+    .await?;
 
     let event_ids = stored_events.iter().map(|e| e.event_id).collect();
 
@@ -121,6 +126,7 @@ async fn update_disposition(
     let stored_events = command_handlers::handle_update_disposition(
         &command,
         state.clock.as_ref(),
+        &state.rng,
         &*state.event_repository,
     )
     .await?;
@@ -165,6 +171,7 @@ async fn archive_world_snapshot(
     let stored_events = command_handlers::handle_archive_world_snapshot(
         &command,
         state.clock.as_ref(),
+        &state.rng,
         &*state.event_repository,
     )
     .await?;

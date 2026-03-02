@@ -85,9 +85,13 @@ async fn add_item(
 
     info!(correlation_id = %command.correlation_id, "handling add_item command");
 
-    let result =
-        command_handlers::handle_add_item(&command, state.clock.as_ref(), &*state.event_repository)
-            .await?;
+    let result = command_handlers::handle_add_item(
+        &command,
+        state.clock.as_ref(),
+        &state.rng,
+        &*state.event_repository,
+    )
+    .await?;
 
     let event_ids = result.stored_events.iter().map(|e| e.event_id).collect();
 
@@ -114,6 +118,7 @@ async fn remove_item(
     let result = command_handlers::handle_remove_item(
         &command,
         state.clock.as_ref(),
+        &state.rng,
         &*state.event_repository,
     )
     .await?;
@@ -143,6 +148,7 @@ async fn equip_item(
     let result = command_handlers::handle_equip_item(
         &command,
         state.clock.as_ref(),
+        &state.rng,
         &*state.event_repository,
     )
     .await?;
@@ -171,6 +177,7 @@ async fn archive_inventory(
     let result = command_handlers::handle_archive_inventory(
         &command,
         state.clock.as_ref(),
+        &state.rng,
         &*state.event_repository,
     )
     .await?;

@@ -6,6 +6,7 @@ use otherworlds_core::aggregate::AggregateRoot;
 use otherworlds_core::clock::Clock;
 use otherworlds_core::error::DomainError;
 use otherworlds_core::event::EventMetadata;
+use otherworlds_core::rng::DeterministicRng;
 use uuid::Uuid;
 
 use super::events::{
@@ -54,13 +55,16 @@ impl WorldSnapshot {
     }
 
     /// Applies an effect to the world state, producing a `WorldFactChanged` event.
-    pub fn apply_effect(&mut self, fact_key: String, correlation_id: Uuid, clock: &dyn Clock) {
-        // TODO: event_id uses Uuid::new_v4() which breaks replay determinism.
-        // Requires extending DeterministicRng to support UUID generation and
-        // threading &mut dyn DeterministicRng through all domain methods.
+    pub fn apply_effect(
+        &mut self,
+        fact_key: String,
+        correlation_id: Uuid,
+        clock: &dyn Clock,
+        rng: &mut dyn DeterministicRng,
+    ) {
         let event = WorldStateEvent {
             metadata: EventMetadata {
-                event_id: Uuid::new_v4(),
+                event_id: rng.next_uuid(),
                 event_type: "world_state.world_fact_changed".to_owned(),
                 aggregate_id: self.id,
                 sequence_number: self.next_sequence_number(),
@@ -84,12 +88,11 @@ impl WorldSnapshot {
         value: bool,
         correlation_id: Uuid,
         clock: &dyn Clock,
+        rng: &mut dyn DeterministicRng,
     ) {
-        // TODO: event_id uses Uuid::new_v4() which breaks replay determinism.
-        // See TODO on `apply_effect()` for details.
         let event = WorldStateEvent {
             metadata: EventMetadata {
-                event_id: Uuid::new_v4(),
+                event_id: rng.next_uuid(),
                 event_type: "world_state.flag_set".to_owned(),
                 aggregate_id: self.id,
                 sequence_number: self.next_sequence_number(),
@@ -108,12 +111,16 @@ impl WorldSnapshot {
     }
 
     /// Updates a disposition in the world state, producing a `DispositionUpdated` event.
-    pub fn update_disposition(&mut self, entity_id: Uuid, correlation_id: Uuid, clock: &dyn Clock) {
-        // TODO: event_id uses Uuid::new_v4() which breaks replay determinism.
-        // See TODO on `apply_effect()` for details.
+    pub fn update_disposition(
+        &mut self,
+        entity_id: Uuid,
+        correlation_id: Uuid,
+        clock: &dyn Clock,
+        rng: &mut dyn DeterministicRng,
+    ) {
         let event = WorldStateEvent {
             metadata: EventMetadata {
-                event_id: Uuid::new_v4(),
+                event_id: rng.next_uuid(),
                 event_type: "world_state.disposition_updated".to_owned(),
                 aggregate_id: self.id,
                 sequence_number: self.next_sequence_number(),
@@ -135,7 +142,12 @@ impl WorldSnapshot {
     /// # Errors
     ///
     /// Returns `DomainError::Validation` if the world snapshot is already archived.
-    pub fn archive(&mut self, correlation_id: Uuid, clock: &dyn Clock) -> Result<(), DomainError> {
+    pub fn archive(
+        &mut self,
+        correlation_id: Uuid,
+        clock: &dyn Clock,
+        rng: &mut dyn DeterministicRng,
+    ) -> Result<(), DomainError> {
         if self.archived {
             return Err(DomainError::Validation(
                 "world snapshot is already archived".into(),
@@ -144,7 +156,7 @@ impl WorldSnapshot {
 
         let event = WorldStateEvent {
             metadata: EventMetadata {
-                event_id: Uuid::new_v4(),
+                event_id: rng.next_uuid(),
                 event_type: "world_state.world_snapshot_archived".to_owned(),
                 aggregate_id: self.id,
                 sequence_number: self.next_sequence_number(),
@@ -206,7 +218,7 @@ mod tests {
     use chrono::{TimeZone, Utc};
     use otherworlds_core::aggregate::AggregateRoot;
     use otherworlds_core::event::DomainEvent;
-    use otherworlds_test_support::FixedClock;
+    use otherworlds_test_support::{FixedClock, MockRng};
 
     #[test]
     fn test_apply_effect_produces_world_fact_changed_event() {
@@ -218,7 +230,12 @@ mod tests {
         let mut snapshot = WorldSnapshot::new(world_id);
 
         // Act
-        snapshot.apply_effect("quest_complete".to_owned(), correlation_id, &clock);
+        snapshot.apply_effect(
+            "quest_complete".to_owned(),
+            correlation_id,
+            &clock,
+            &mut MockRng,
+        );
 
         // Assert
         let events = snapshot.uncommitted_events();
@@ -345,7 +362,13 @@ mod tests {
         let mut snapshot = WorldSnapshot::new(world_id);
 
         // Act
-        snapshot.set_flag("door_unlocked".to_owned(), true, correlation_id, &clock);
+        snapshot.set_flag(
+            "door_unlocked".to_owned(),
+            true,
+            correlation_id,
+            &clock,
+            &mut MockRng,
+        );
 
         // Assert
         let events = snapshot.uncommitted_events();
@@ -381,7 +404,13 @@ mod tests {
         let mut snapshot = WorldSnapshot::new(world_id);
 
         // Act
-        snapshot.set_flag("door_unlocked".to_owned(), false, correlation_id, &clock);
+        snapshot.set_flag(
+            "door_unlocked".to_owned(),
+            false,
+            correlation_id,
+            &clock,
+            &mut MockRng,
+        );
 
         // Assert
         let events = snapshot.uncommitted_events();
@@ -407,7 +436,7 @@ mod tests {
         let mut snapshot = WorldSnapshot::new(world_id);
 
         // Act
-        let result = snapshot.archive(correlation_id, &clock);
+        let result = snapshot.archive(correlation_id, &clock, &mut MockRng);
 
         // Assert
         assert!(result.is_ok());
@@ -459,7 +488,7 @@ mod tests {
         snapshot.apply(&event);
 
         // Act
-        let result = snapshot.archive(Uuid::new_v4(), &clock);
+        let result = snapshot.archive(Uuid::new_v4(), &clock, &mut MockRng);
 
         // Assert
         assert!(result.is_err());
@@ -513,7 +542,7 @@ mod tests {
         let mut snapshot = WorldSnapshot::new(world_id);
 
         // Act
-        snapshot.update_disposition(entity_id, correlation_id, &clock);
+        snapshot.update_disposition(entity_id, correlation_id, &clock, &mut MockRng);
 
         // Assert
         let events = snapshot.uncommitted_events();

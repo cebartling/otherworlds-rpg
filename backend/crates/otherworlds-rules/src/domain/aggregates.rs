@@ -124,6 +124,7 @@ impl Resolution {
         params: DeclareIntentParams,
         correlation_id: Uuid,
         clock: &dyn Clock,
+        rng: &mut dyn DeterministicRng,
     ) -> Result<(), DomainError> {
         if self.phase != ResolutionPhase::Created {
             return Err(DomainError::Validation(
@@ -133,7 +134,7 @@ impl Resolution {
 
         let event = RulesEvent {
             metadata: EventMetadata {
-                event_id: Uuid::new_v4(),
+                event_id: rng.next_uuid(),
                 event_type: "rules.intent_declared".to_owned(),
                 aggregate_id: self.id,
                 sequence_number: self.next_sequence_number(),
@@ -186,17 +187,11 @@ impl Resolution {
         let total = natural_roll as i32 + intent.modifier;
         let outcome = determine_outcome(natural_roll, total, intent.difficulty_class);
 
-        // Generate a deterministic check_id from four RNG-produced u32 values
-        // to fill all 128 bits of the UUID.
-        let a = u64::from(rng.next_u32_range(0, u32::MAX));
-        let b = u64::from(rng.next_u32_range(0, u32::MAX));
-        let c = u64::from(rng.next_u32_range(0, u32::MAX));
-        let d = u64::from(rng.next_u32_range(0, u32::MAX));
-        let check_id = Uuid::from_u64_pair((a << 32) | b, (c << 32) | d);
+        let check_id = rng.next_uuid();
 
         let event = RulesEvent {
             metadata: EventMetadata {
-                event_id: Uuid::new_v4(),
+                event_id: rng.next_uuid(),
                 event_type: "rules.check_resolved".to_owned(),
                 aggregate_id: self.id,
                 sequence_number: self.next_sequence_number(),
@@ -229,6 +224,7 @@ impl Resolution {
         effects: Vec<ResolvedEffect>,
         correlation_id: Uuid,
         clock: &dyn Clock,
+        rng: &mut dyn DeterministicRng,
     ) -> Result<(), DomainError> {
         if self.phase != ResolutionPhase::CheckResolved {
             return Err(DomainError::Validation(
@@ -238,7 +234,7 @@ impl Resolution {
 
         let event = RulesEvent {
             metadata: EventMetadata {
-                event_id: Uuid::new_v4(),
+                event_id: rng.next_uuid(),
                 event_type: "rules.effects_produced".to_owned(),
                 aggregate_id: self.id,
                 sequence_number: self.next_sequence_number(),
@@ -261,7 +257,12 @@ impl Resolution {
     /// # Errors
     ///
     /// Returns `DomainError::Validation` if the resolution is already archived.
-    pub fn archive(&mut self, correlation_id: Uuid, clock: &dyn Clock) -> Result<(), DomainError> {
+    pub fn archive(
+        &mut self,
+        correlation_id: Uuid,
+        clock: &dyn Clock,
+        rng: &mut dyn DeterministicRng,
+    ) -> Result<(), DomainError> {
         if self.archived {
             return Err(DomainError::Validation(
                 "resolution is already archived".to_owned(),
@@ -270,7 +271,7 @@ impl Resolution {
 
         let event = RulesEvent {
             metadata: EventMetadata {
-                event_id: Uuid::new_v4(),
+                event_id: rng.next_uuid(),
                 event_type: "rules.resolution_archived".to_owned(),
                 aggregate_id: self.id,
                 sequence_number: self.next_sequence_number(),
@@ -349,7 +350,7 @@ mod tests {
     use chrono::{TimeZone, Utc};
     use otherworlds_core::aggregate::AggregateRoot;
     use otherworlds_core::event::DomainEvent;
-    use otherworlds_test_support::{FixedClock, SequenceRng};
+    use otherworlds_test_support::{FixedClock, MockRng, SequenceRng};
 
     fn fixed_clock() -> FixedClock {
         FixedClock(Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap())
@@ -376,6 +377,7 @@ mod tests {
             },
             correlation_id,
             &clock,
+            &mut MockRng,
         );
 
         assert!(result.is_ok());
@@ -405,6 +407,7 @@ mod tests {
             },
             Uuid::new_v4(),
             &fixed_clock(),
+            &mut MockRng,
         );
 
         assert!(result.is_err());
@@ -432,6 +435,7 @@ mod tests {
             },
             Uuid::new_v4(),
             &fixed_clock(),
+            &mut MockRng,
         );
 
         assert!(result.is_err());
@@ -527,6 +531,7 @@ mod tests {
                 },
                 Uuid::new_v4(),
                 &clock,
+                &mut MockRng,
             )
             .unwrap();
 
@@ -612,8 +617,7 @@ mod tests {
             modifier: 3,
         });
 
-        // RNG: first value is the d20 roll (15), next four are for check_id generation
-        let mut rng = SequenceRng::new(vec![15, 42, 99, 7, 13]);
+        let mut rng = SequenceRng::new(vec![15, 42, 99, 7, 13, 0, 0, 0, 0]);
 
         let result = resolution.resolve_check(correlation_id, &clock, &mut rng);
         assert!(result.is_ok());
@@ -673,7 +677,7 @@ mod tests {
             difficulty_class: 5,
             modifier: 10,
         });
-        let mut rng = SequenceRng::new(vec![1, 42, 99, 7, 13]);
+        let mut rng = SequenceRng::new(vec![1, 42, 99, 7, 13, 0, 0, 0, 0]);
 
         resolution
             .resolve_check(Uuid::new_v4(), &fixed_clock(), &mut rng)
@@ -700,7 +704,7 @@ mod tests {
             difficulty_class: 30,
             modifier: -5,
         });
-        let mut rng = SequenceRng::new(vec![20, 42, 99, 7, 13]);
+        let mut rng = SequenceRng::new(vec![20, 42, 99, 7, 13, 0, 0, 0, 0]);
 
         resolution
             .resolve_check(Uuid::new_v4(), &fixed_clock(), &mut rng)
@@ -728,7 +732,7 @@ mod tests {
             modifier: 3,
         });
         // Roll 15 + modifier 3 = total 18, DC 15 → Success
-        let mut rng = SequenceRng::new(vec![15, 42, 99, 7, 13]);
+        let mut rng = SequenceRng::new(vec![15, 42, 99, 7, 13, 0, 0, 0, 0]);
 
         resolution
             .resolve_check(Uuid::new_v4(), &fixed_clock(), &mut rng)
@@ -756,7 +760,7 @@ mod tests {
             modifier: 2,
         });
         // Roll 8 + modifier 2 = total 10, DC 15 → 10 >= 15-5 → PartialSuccess
-        let mut rng = SequenceRng::new(vec![8, 42, 99, 7, 13]);
+        let mut rng = SequenceRng::new(vec![8, 42, 99, 7, 13, 0, 0, 0, 0]);
 
         resolution
             .resolve_check(Uuid::new_v4(), &fixed_clock(), &mut rng)
@@ -784,7 +788,7 @@ mod tests {
             modifier: 1,
         });
         // Roll 3 + modifier 1 = total 4, DC 15 → 4 < 10 → Failure
-        let mut rng = SequenceRng::new(vec![3, 42, 99, 7, 13]);
+        let mut rng = SequenceRng::new(vec![3, 42, 99, 7, 13, 0, 0, 0, 0]);
 
         resolution
             .resolve_check(Uuid::new_v4(), &fixed_clock(), &mut rng)
@@ -812,7 +816,7 @@ mod tests {
             modifier: 5,
         });
         // Roll 10 + modifier 5 = total 15, DC 5 → 15 >= 5+10 → CriticalSuccess
-        let mut rng = SequenceRng::new(vec![10, 42, 99, 7, 13]);
+        let mut rng = SequenceRng::new(vec![10, 42, 99, 7, 13, 0, 0, 0, 0]);
 
         resolution
             .resolve_check(Uuid::new_v4(), &fixed_clock(), &mut rng)
@@ -884,6 +888,7 @@ mod tests {
                 },
                 Uuid::new_v4(),
                 &clock,
+                &mut MockRng,
             )
             .unwrap();
 
@@ -896,7 +901,7 @@ mod tests {
         assert_eq!(resolution.phase, ResolutionPhase::IntentDeclared);
 
         // Resolve check — roll 15 + modifier 3 = total 18, DC 15 → Success
-        let mut rng = SequenceRng::new(vec![15, 42, 99, 7, 13]);
+        let mut rng = SequenceRng::new(vec![15, 42, 99, 7, 13, 0, 0, 0, 0]);
         resolution
             .resolve_check(Uuid::new_v4(), &clock, &mut rng)
             .unwrap();
@@ -929,7 +934,7 @@ mod tests {
             payload: serde_json::json!({ "amount": 8 }),
         }];
 
-        let result = resolution.produce_effects(effects, correlation_id, &clock);
+        let result = resolution.produce_effects(effects, correlation_id, &clock, &mut MockRng);
         assert!(result.is_ok());
 
         let events = resolution.uncommitted_events();
@@ -941,7 +946,8 @@ mod tests {
     fn test_produce_effects_in_created_phase_returns_error() {
         let mut resolution = Resolution::new(Uuid::new_v4());
 
-        let result = resolution.produce_effects(vec![], Uuid::new_v4(), &fixed_clock());
+        let result =
+            resolution.produce_effects(vec![], Uuid::new_v4(), &fixed_clock(), &mut MockRng);
 
         assert!(result.is_err());
         match result.unwrap_err() {
@@ -957,7 +963,8 @@ mod tests {
         let mut resolution = Resolution::new(Uuid::new_v4());
         resolution.phase = ResolutionPhase::IntentDeclared;
 
-        let result = resolution.produce_effects(vec![], Uuid::new_v4(), &fixed_clock());
+        let result =
+            resolution.produce_effects(vec![], Uuid::new_v4(), &fixed_clock(), &mut MockRng);
         assert!(result.is_err());
     }
 
@@ -966,7 +973,8 @@ mod tests {
         let mut resolution = Resolution::new(Uuid::new_v4());
         resolution.phase = ResolutionPhase::EffectsProduced;
 
-        let result = resolution.produce_effects(vec![], Uuid::new_v4(), &fixed_clock());
+        let result =
+            resolution.produce_effects(vec![], Uuid::new_v4(), &fixed_clock(), &mut MockRng);
         assert!(result.is_err());
     }
 
@@ -990,7 +998,7 @@ mod tests {
         ];
 
         resolution
-            .produce_effects(effects, Uuid::new_v4(), &fixed_clock())
+            .produce_effects(effects, Uuid::new_v4(), &fixed_clock(), &mut MockRng)
             .unwrap();
 
         match &resolution.uncommitted_events()[0].kind {
@@ -1057,6 +1065,7 @@ mod tests {
                 },
                 Uuid::new_v4(),
                 &clock,
+                &mut MockRng,
             )
             .unwrap();
 
@@ -1067,7 +1076,7 @@ mod tests {
         resolution.clear_uncommitted_events();
 
         // Phase 2: Resolve check
-        let mut rng = SequenceRng::new(vec![15, 42, 99, 7, 13]);
+        let mut rng = SequenceRng::new(vec![15, 42, 99, 7, 13, 0, 0, 0, 0]);
         resolution
             .resolve_check(Uuid::new_v4(), &clock, &mut rng)
             .unwrap();
@@ -1084,7 +1093,7 @@ mod tests {
             payload: serde_json::json!({ "amount": 8 }),
         }];
         resolution
-            .produce_effects(effects, Uuid::new_v4(), &clock)
+            .produce_effects(effects, Uuid::new_v4(), &clock, &mut MockRng)
             .unwrap();
 
         for event in resolution.uncommitted_events().to_vec() {
@@ -1109,7 +1118,7 @@ mod tests {
         let clock = fixed_clock();
         let mut resolution = Resolution::new(resolution_id);
 
-        let result = resolution.archive(correlation_id, &clock);
+        let result = resolution.archive(correlation_id, &clock, &mut MockRng);
 
         assert!(result.is_ok());
         let events = resolution.uncommitted_events();
@@ -1154,7 +1163,7 @@ mod tests {
         let mut resolution = Resolution::new(Uuid::new_v4());
         resolution.archived = true;
 
-        let result = resolution.archive(Uuid::new_v4(), &fixed_clock());
+        let result = resolution.archive(Uuid::new_v4(), &fixed_clock(), &mut MockRng);
 
         assert!(result.is_err());
         match result.unwrap_err() {

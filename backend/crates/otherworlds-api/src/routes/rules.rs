@@ -103,6 +103,7 @@ async fn declare_intent(
     let stored_events = command_handlers::handle_declare_intent(
         &command,
         state.clock.as_ref(),
+        &state.rng,
         &*state.event_repository,
     )
     .await?;
@@ -167,6 +168,7 @@ async fn produce_effects(
     let stored_events = command_handlers::handle_produce_effects(
         &command,
         state.clock.as_ref(),
+        &state.rng,
         &*state.event_repository,
     )
     .await?;
@@ -211,6 +213,7 @@ async fn archive_resolution(
     let stored_events = command_handlers::handle_archive_resolution(
         &command,
         state.clock.as_ref(),
+        &state.rng,
         &*state.event_repository,
     )
     .await?;
@@ -447,9 +450,10 @@ mod tests {
         let resolution_id = Uuid::new_v4();
         let repo =
             RecordingEventRepository::new(Ok(vec![intent_declared_stored_event(resolution_id)]));
-        // RNG: d20 roll, then four values for check_id
         let rng: Arc<Mutex<dyn DeterministicRng + Send>> =
-            Arc::new(Mutex::new(SequenceRng::new(vec![15, 42, 99, 7, 13])));
+            Arc::new(Mutex::new(SequenceRng::new(vec![
+                15, 42, 99, 7, 13, 0, 0, 0, 0,
+            ])));
         let app = router().with_state(app_state_with_rng(Arc::new(repo), rng));
 
         let body = serde_json::json!({ "resolution_id": resolution_id });

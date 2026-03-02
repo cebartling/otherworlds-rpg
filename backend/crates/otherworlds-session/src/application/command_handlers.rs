@@ -3,11 +3,14 @@
 //! This module contains application-level command handler functions that
 //! orchestrate domain logic: load aggregate, execute command, persist events.
 
+use std::sync::Mutex;
+
 use otherworlds_core::aggregate::AggregateRoot;
 use otherworlds_core::clock::Clock;
 use otherworlds_core::error::DomainError;
 use otherworlds_core::event::DomainEvent;
 use otherworlds_core::repository::{EventRepository, StoredEvent};
+use otherworlds_core::rng::DeterministicRng;
 use uuid::Uuid;
 
 use crate::domain::aggregates::CampaignRun;
@@ -80,12 +83,28 @@ pub(crate) fn reconstitute(
 pub async fn handle_start_campaign_run(
     command: &StartCampaignRun,
     clock: &dyn Clock,
+    rng: &Mutex<dyn DeterministicRng + Send>,
     repo: &dyn EventRepository,
 ) -> Result<SessionCommandResult, DomainError> {
-    let run_id = Uuid::new_v4();
+    let run_id = {
+        let mut rng_guard = rng
+            .lock()
+            .map_err(|e| DomainError::Infrastructure(format!("RNG mutex poisoned: {e}")))?;
+        rng_guard.next_uuid()
+    };
     let mut run = CampaignRun::new(run_id);
 
-    run.start_campaign_run(command.campaign_id, command.correlation_id, clock);
+    {
+        let mut rng_guard = rng
+            .lock()
+            .map_err(|e| DomainError::Infrastructure(format!("RNG mutex poisoned: {e}")))?;
+        run.start_campaign_run(
+            command.campaign_id,
+            command.correlation_id,
+            clock,
+            &mut *rng_guard,
+        );
+    }
 
     let stored_events: Vec<StoredEvent> = run
         .uncommitted_events()
@@ -111,6 +130,7 @@ pub async fn handle_start_campaign_run(
 pub async fn handle_create_checkpoint(
     command: &CreateCheckpoint,
     clock: &dyn Clock,
+    rng: &Mutex<dyn DeterministicRng + Send>,
     repo: &dyn EventRepository,
 ) -> Result<SessionCommandResult, DomainError> {
     let existing_events = repo.load_events(command.run_id).await?;
@@ -122,7 +142,12 @@ pub async fn handle_create_checkpoint(
         return Err(DomainError::Validation("campaign run is archived".into()));
     }
 
-    run.create_checkpoint(command.correlation_id, clock);
+    {
+        let mut rng_guard = rng
+            .lock()
+            .map_err(|e| DomainError::Infrastructure(format!("RNG mutex poisoned: {e}")))?;
+        run.create_checkpoint(command.correlation_id, clock, &mut *rng_guard);
+    }
 
     let stored_events: Vec<StoredEvent> = run
         .uncommitted_events()
@@ -149,6 +174,7 @@ pub async fn handle_create_checkpoint(
 pub async fn handle_branch_timeline(
     command: &BranchTimeline,
     clock: &dyn Clock,
+    rng: &Mutex<dyn DeterministicRng + Send>,
     repo: &dyn EventRepository,
 ) -> Result<SessionCommandResult, DomainError> {
     // Load source run events to verify it exists.
@@ -161,15 +187,26 @@ pub async fn handle_branch_timeline(
         return Err(DomainError::Validation("campaign run is archived".into()));
     }
 
-    let branch_run_id = Uuid::new_v4();
+    let branch_run_id = {
+        let mut rng_guard = rng
+            .lock()
+            .map_err(|e| DomainError::Infrastructure(format!("RNG mutex poisoned: {e}")))?;
+        rng_guard.next_uuid()
+    };
     let mut branch = CampaignRun::new(branch_run_id);
 
-    branch.branch_timeline(
-        command.source_run_id,
-        command.from_checkpoint_id,
-        command.correlation_id,
-        clock,
-    );
+    {
+        let mut rng_guard = rng
+            .lock()
+            .map_err(|e| DomainError::Infrastructure(format!("RNG mutex poisoned: {e}")))?;
+        branch.branch_timeline(
+            command.source_run_id,
+            command.from_checkpoint_id,
+            command.correlation_id,
+            clock,
+            &mut *rng_guard,
+        );
+    }
 
     let stored_events: Vec<StoredEvent> = branch
         .uncommitted_events()
@@ -197,6 +234,7 @@ pub async fn handle_branch_timeline(
 pub async fn handle_archive_campaign_run(
     command: &ArchiveCampaignRun,
     clock: &dyn Clock,
+    rng: &Mutex<dyn DeterministicRng + Send>,
     repo: &dyn EventRepository,
 ) -> Result<SessionCommandResult, DomainError> {
     let existing_events = repo.load_events(command.run_id).await?;
@@ -205,7 +243,12 @@ pub async fn handle_archive_campaign_run(
     }
     let mut run = reconstitute(command.run_id, &existing_events)?;
 
-    run.archive(command.correlation_id, clock)?;
+    {
+        let mut rng_guard = rng
+            .lock()
+            .map_err(|e| DomainError::Infrastructure(format!("RNG mutex poisoned: {e}")))?;
+        run.archive(command.correlation_id, clock, &mut *rng_guard)?;
+    }
 
     let stored_events: Vec<StoredEvent> = run
         .uncommitted_events()
@@ -227,6 +270,8 @@ mod tests {
     use chrono::{DateTime, TimeZone, Utc};
     use otherworlds_core::error::DomainError;
     use otherworlds_core::repository::StoredEvent;
+    use otherworlds_core::rng::DeterministicRng;
+    use std::sync::{Arc, Mutex};
     use uuid::Uuid;
 
     use crate::application::command_handlers::{
@@ -237,7 +282,7 @@ mod tests {
         ArchiveCampaignRun, BranchTimeline, CreateCheckpoint, StartCampaignRun,
     };
     use crate::domain::events::{CampaignRunArchived, CampaignRunStarted, SessionEventKind};
-    use otherworlds_test_support::{FixedClock, RecordingEventRepository};
+    use otherworlds_test_support::{FixedClock, MockRng, RecordingEventRepository};
 
     #[tokio::test]
     async fn test_handle_start_campaign_run_persists_campaign_run_started_event() {
@@ -246,6 +291,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let repo = RecordingEventRepository::new(Ok(Vec::new()));
 
         let command = StartCampaignRun {
@@ -254,7 +300,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_start_campaign_run(&command, &clock, &repo).await;
+        let result = handle_start_campaign_run(&command, &clock, &*rng, &repo).await;
 
         // Assert
         let cmd_result = result.unwrap();
@@ -284,6 +330,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let existing_event = dummy_stored_event(run_id, fixed_now);
         let repo = RecordingEventRepository::new(Ok(vec![existing_event]));
 
@@ -293,7 +340,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_create_checkpoint(&command, &clock, &repo).await;
+        let result = handle_create_checkpoint(&command, &clock, &*rng, &repo).await;
 
         // Assert
         let cmd_result = result.unwrap();
@@ -324,6 +371,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let repo = RecordingEventRepository::new(Ok(Vec::new()));
 
         let command = CreateCheckpoint {
@@ -332,7 +380,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_create_checkpoint(&command, &clock, &repo).await;
+        let result = handle_create_checkpoint(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());
@@ -369,6 +417,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let source_event = dummy_stored_event(source_run_id, fixed_now);
         let repo = RecordingEventRepository::new(Ok(vec![source_event]));
 
@@ -379,7 +428,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_branch_timeline(&command, &clock, &repo).await;
+        let result = handle_branch_timeline(&command, &clock, &*rng, &repo).await;
 
         // Assert
         let cmd_result = result.unwrap();
@@ -410,6 +459,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let repo = RecordingEventRepository::new(Ok(Vec::new()));
 
         let command = BranchTimeline {
@@ -419,7 +469,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_branch_timeline(&command, &clock, &repo).await;
+        let result = handle_branch_timeline(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());
@@ -436,6 +486,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let existing_event = dummy_stored_event(run_id, fixed_now);
         let repo = RecordingEventRepository::new(Ok(vec![existing_event]));
 
@@ -445,7 +496,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_archive_campaign_run(&command, &clock, &repo).await;
+        let result = handle_archive_campaign_run(&command, &clock, &*rng, &repo).await;
 
         // Assert
         let cmd_result = result.unwrap();
@@ -476,6 +527,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let repo = RecordingEventRepository::new(Ok(Vec::new()));
 
         let command = ArchiveCampaignRun {
@@ -484,7 +536,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_archive_campaign_run(&command, &clock, &repo).await;
+        let result = handle_archive_campaign_run(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());
@@ -501,6 +553,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let existing_event = dummy_stored_event(run_id, fixed_now);
         let archived_event = StoredEvent {
             event_id: Uuid::new_v4(),
@@ -523,7 +576,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_archive_campaign_run(&command, &clock, &repo).await;
+        let result = handle_archive_campaign_run(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());
@@ -542,6 +595,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let existing_event = dummy_stored_event(run_id, fixed_now);
         let archived_event = StoredEvent {
             event_id: Uuid::new_v4(),
@@ -564,7 +618,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_create_checkpoint(&command, &clock, &repo).await;
+        let result = handle_create_checkpoint(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());
@@ -584,6 +638,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let existing_event = dummy_stored_event(source_run_id, fixed_now);
         let archived_event = StoredEvent {
             event_id: Uuid::new_v4(),
@@ -609,7 +664,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_branch_timeline(&command, &clock, &repo).await;
+        let result = handle_branch_timeline(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());

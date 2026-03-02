@@ -3,11 +3,14 @@
 //! This module contains application-level command handler functions that
 //! orchestrate domain logic: load aggregate, execute command, persist events.
 
+use std::sync::Mutex;
+
 use otherworlds_core::aggregate::AggregateRoot;
 use otherworlds_core::clock::Clock;
 use otherworlds_core::error::DomainError;
 use otherworlds_core::event::DomainEvent;
 use otherworlds_core::repository::{EventRepository, StoredEvent};
+use otherworlds_core::rng::DeterministicRng;
 use uuid::Uuid;
 
 use crate::domain::aggregates::Character;
@@ -71,6 +74,7 @@ pub(crate) fn reconstitute(
 pub async fn handle_create_character(
     command: &CreateCharacter,
     clock: &dyn Clock,
+    rng: &Mutex<dyn DeterministicRng + Send>,
     repo: &dyn EventRepository,
 ) -> Result<Vec<StoredEvent>, DomainError> {
     if command.name.trim().is_empty() {
@@ -82,7 +86,17 @@ pub async fn handle_create_character(
     let character_id = command.character_id;
     let mut character = Character::new(character_id);
 
-    character.create(command.name.clone(), command.correlation_id, clock);
+    {
+        let mut rng_guard = rng
+            .lock()
+            .map_err(|e| DomainError::Infrastructure(format!("RNG mutex poisoned: {e}")))?;
+        character.create(
+            command.name.clone(),
+            command.correlation_id,
+            clock,
+            &mut *rng_guard,
+        );
+    }
 
     let stored_events: Vec<StoredEvent> = character
         .uncommitted_events()
@@ -105,6 +119,7 @@ pub async fn handle_create_character(
 pub async fn handle_modify_attribute(
     command: &ModifyAttribute,
     clock: &dyn Clock,
+    rng: &Mutex<dyn DeterministicRng + Send>,
     repo: &dyn EventRepository,
 ) -> Result<Vec<StoredEvent>, DomainError> {
     if command.attribute.trim().is_empty() {
@@ -123,12 +138,18 @@ pub async fn handle_modify_attribute(
         return Err(DomainError::Validation("character is archived".into()));
     }
 
-    character.modify_attribute(
-        command.attribute.clone(),
-        command.new_value,
-        command.correlation_id,
-        clock,
-    );
+    {
+        let mut rng_guard = rng
+            .lock()
+            .map_err(|e| DomainError::Infrastructure(format!("RNG mutex poisoned: {e}")))?;
+        character.modify_attribute(
+            command.attribute.clone(),
+            command.new_value,
+            command.correlation_id,
+            clock,
+            &mut *rng_guard,
+        );
+    }
 
     let stored_events: Vec<StoredEvent> = character
         .uncommitted_events()
@@ -151,6 +172,7 @@ pub async fn handle_modify_attribute(
 pub async fn handle_award_experience(
     command: &AwardExperience,
     clock: &dyn Clock,
+    rng: &Mutex<dyn DeterministicRng + Send>,
     repo: &dyn EventRepository,
 ) -> Result<Vec<StoredEvent>, DomainError> {
     if command.amount == 0 {
@@ -169,7 +191,17 @@ pub async fn handle_award_experience(
         return Err(DomainError::Validation("character is archived".into()));
     }
 
-    character.award_experience(command.amount, command.correlation_id, clock);
+    {
+        let mut rng_guard = rng
+            .lock()
+            .map_err(|e| DomainError::Infrastructure(format!("RNG mutex poisoned: {e}")))?;
+        character.award_experience(
+            command.amount,
+            command.correlation_id,
+            clock,
+            &mut *rng_guard,
+        );
+    }
 
     let stored_events: Vec<StoredEvent> = character
         .uncommitted_events()
@@ -194,6 +226,7 @@ pub async fn handle_award_experience(
 pub async fn handle_archive_character(
     command: &ArchiveCharacter,
     clock: &dyn Clock,
+    rng: &Mutex<dyn DeterministicRng + Send>,
     repo: &dyn EventRepository,
 ) -> Result<Vec<StoredEvent>, DomainError> {
     let existing_events = repo.load_events(command.character_id).await?;
@@ -202,7 +235,12 @@ pub async fn handle_archive_character(
     }
     let mut character = reconstitute(command.character_id, &existing_events)?;
 
-    character.archive(command.correlation_id, clock)?;
+    {
+        let mut rng_guard = rng
+            .lock()
+            .map_err(|e| DomainError::Infrastructure(format!("RNG mutex poisoned: {e}")))?;
+        character.archive(command.correlation_id, clock, &mut *rng_guard)?;
+    }
 
     let stored_events: Vec<StoredEvent> = character
         .uncommitted_events()
@@ -218,8 +256,11 @@ pub async fn handle_archive_character(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
     use chrono::{TimeZone, Utc};
     use otherworlds_core::error::DomainError;
+    use otherworlds_core::rng::DeterministicRng;
     use uuid::Uuid;
 
     use otherworlds_core::repository::StoredEvent;
@@ -232,7 +273,7 @@ mod tests {
         ArchiveCharacter, AwardExperience, CreateCharacter, ModifyAttribute,
     };
     use crate::domain::events::{CharacterCreated, CharacterEventKind};
-    use otherworlds_test_support::{FixedClock, RecordingEventRepository};
+    use otherworlds_test_support::{FixedClock, MockRng, RecordingEventRepository};
 
     fn character_created_event(
         character_id: Uuid,
@@ -260,6 +301,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let repo = RecordingEventRepository::new(Ok(Vec::new()));
 
         let character_id = Uuid::new_v4();
@@ -270,7 +312,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_create_character(&command, &clock, &repo).await;
+        let result = handle_create_character(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_ok());
@@ -299,6 +341,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let existing = vec![character_created_event(character_id, fixed_now)];
         let repo = RecordingEventRepository::new(Ok(existing));
 
@@ -310,7 +353,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_modify_attribute(&command, &clock, &repo).await;
+        let result = handle_modify_attribute(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_ok());
@@ -339,6 +382,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let existing = vec![character_created_event(character_id, fixed_now)];
         let repo = RecordingEventRepository::new(Ok(existing));
 
@@ -349,7 +393,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_award_experience(&command, &clock, &repo).await;
+        let result = handle_award_experience(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_ok());
@@ -375,6 +419,7 @@ mod tests {
     async fn test_handle_create_character_rejects_empty_name() {
         // Arrange
         let clock = FixedClock(Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap());
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let repo = RecordingEventRepository::new(Ok(Vec::new()));
 
         let command = CreateCharacter {
@@ -384,7 +429,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_create_character(&command, &clock, &repo).await;
+        let result = handle_create_character(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());
@@ -400,6 +445,7 @@ mod tests {
     async fn test_handle_modify_attribute_rejects_empty_attribute() {
         // Arrange
         let clock = FixedClock(Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap());
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let repo = RecordingEventRepository::new(Ok(Vec::new()));
 
         let command = ModifyAttribute {
@@ -410,7 +456,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_modify_attribute(&command, &clock, &repo).await;
+        let result = handle_modify_attribute(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());
@@ -426,6 +472,7 @@ mod tests {
     async fn test_handle_award_experience_rejects_zero_amount() {
         // Arrange
         let clock = FixedClock(Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap());
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let repo = RecordingEventRepository::new(Ok(Vec::new()));
 
         let command = AwardExperience {
@@ -435,7 +482,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_award_experience(&command, &clock, &repo).await;
+        let result = handle_award_experience(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());
@@ -454,6 +501,7 @@ mod tests {
         let correlation_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let existing = vec![character_created_event(character_id, fixed_now)];
         let repo = RecordingEventRepository::new(Ok(existing));
 
@@ -463,7 +511,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_archive_character(&command, &clock, &repo).await;
+        let result = handle_archive_character(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_ok());
@@ -489,6 +537,7 @@ mod tests {
     async fn test_handle_archive_character_rejects_not_found() {
         // Arrange
         let clock = FixedClock(Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap());
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let repo = RecordingEventRepository::new(Ok(Vec::new()));
         let character_id = Uuid::new_v4();
 
@@ -498,7 +547,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_archive_character(&command, &clock, &repo).await;
+        let result = handle_archive_character(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());
@@ -514,6 +563,7 @@ mod tests {
         let character_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
 
         let archived_event = StoredEvent {
             event_id: Uuid::new_v4(),
@@ -540,7 +590,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_archive_character(&command, &clock, &repo).await;
+        let result = handle_archive_character(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());
@@ -558,6 +608,7 @@ mod tests {
         let character_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
 
         let archived_event = StoredEvent {
             event_id: Uuid::new_v4(),
@@ -586,7 +637,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_modify_attribute(&command, &clock, &repo).await;
+        let result = handle_modify_attribute(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());
@@ -604,6 +655,7 @@ mod tests {
         let character_id = Uuid::new_v4();
         let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
 
         let archived_event = StoredEvent {
             event_id: Uuid::new_v4(),
@@ -631,7 +683,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_award_experience(&command, &clock, &repo).await;
+        let result = handle_award_experience(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());
@@ -647,6 +699,7 @@ mod tests {
     async fn test_handle_modify_attribute_rejects_not_found() {
         // Arrange
         let clock = FixedClock(Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap());
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let repo = RecordingEventRepository::new(Ok(Vec::new()));
         let character_id = Uuid::new_v4();
 
@@ -658,7 +711,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_modify_attribute(&command, &clock, &repo).await;
+        let result = handle_modify_attribute(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());
@@ -672,6 +725,7 @@ mod tests {
     async fn test_handle_award_experience_rejects_not_found() {
         // Arrange
         let clock = FixedClock(Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap());
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
         let repo = RecordingEventRepository::new(Ok(Vec::new()));
         let character_id = Uuid::new_v4();
 
@@ -682,7 +736,7 @@ mod tests {
         };
 
         // Act
-        let result = handle_award_experience(&command, &clock, &repo).await;
+        let result = handle_award_experience(&command, &clock, &*rng, &repo).await;
 
         // Assert
         assert!(result.is_err());

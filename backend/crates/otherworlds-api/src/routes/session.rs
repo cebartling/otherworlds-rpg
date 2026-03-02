@@ -64,6 +64,7 @@ async fn start_campaign_run(
     let result = command_handlers::handle_start_campaign_run(
         &command,
         state.clock.as_ref(),
+        &*state.rng,
         &*state.event_repository,
     )
     .await?;
@@ -92,6 +93,7 @@ async fn create_checkpoint(
     let result = command_handlers::handle_create_checkpoint(
         &command,
         state.clock.as_ref(),
+        &*state.rng,
         &*state.event_repository,
     )
     .await?;
@@ -121,6 +123,7 @@ async fn branch_timeline(
     let result = command_handlers::handle_branch_timeline(
         &command,
         state.clock.as_ref(),
+        &*state.rng,
         &*state.event_repository,
     )
     .await?;
@@ -168,6 +171,7 @@ async fn archive_campaign_run(
     let result = command_handlers::handle_archive_campaign_run(
         &command,
         state.clock.as_ref(),
+        &*state.rng,
         &*state.event_repository,
     )
     .await?;
