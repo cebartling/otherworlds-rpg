@@ -1,13 +1,14 @@
 import { test, expect, type Page } from '@playwright/test';
+import { readFileSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const VALID_CAMPAIGN_SOURCE = `---
-title: "Test Campaign"
----
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
-# Scene: start
-
-The adventurers arrive at the village square.
-`;
+const VALID_CAMPAIGN_SOURCE = readFileSync(
+  resolve(__dirname, '../fixtures/the-lost-temple.md'),
+  'utf-8',
+);
 
 const INVALID_CAMPAIGN_SOURCE = 'This has no YAML front-matter and no scenes.';
 
