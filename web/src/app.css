@@ -1,0 +1,15 @@
+@import "tailwindcss";
+
+@theme {
+  /* Dark fantasy color palette */
+  --color-surface: #1a1d23;
+  --color-surface-alt: #252830;
+  --color-accent: #c9a84c;
+  --color-text: #e0ddd5;
+  --color-text-muted: #8a8780;
+
+  /* Semantic aliases for navigation and interactive elements */
+  --color-accent-hover: #d4b95e;
+  --color-surface-hover: #2e3139;
+  --color-border: #3a3d45;
+}
