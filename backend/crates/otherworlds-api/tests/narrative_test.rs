@@ -172,6 +172,169 @@ async fn test_narrative_archive_excludes_from_list(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../../migrations")]
+async fn test_narrative_enter_scene_round_trip(pool: PgPool) {
+    let app = common::build_test_app(pool.clone());
+    let session_id = Uuid::new_v4();
+
+    // POST /api/v1/narrative/enter-scene
+    let (status, json) = common::post_json(
+        app,
+        "/api/v1/narrative/enter-scene",
+        &serde_json::json!({
+            "session_id": session_id,
+            "scene_id": "tavern",
+            "narrative_text": "You enter the tavern.",
+            "choices": [
+                { "label": "Leave", "target_scene_id": "street" },
+                { "label": "Talk to barkeep", "target_scene_id": "barkeep_dialogue" }
+            ],
+            "npc_refs": ["barkeep"]
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let event_ids = json["event_ids"].as_array().unwrap();
+    assert_eq!(event_ids.len(), 1);
+
+    // GET /api/v1/narrative/{session_id} — verify scene state
+    let app = common::build_test_app(pool);
+    let (status, json) = common::get_json(app, &format!("/api/v1/narrative/{session_id}")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["session_id"], session_id.to_string());
+    assert_eq!(json["current_scene_id"], "tavern");
+    assert_eq!(json["scene_history"], serde_json::json!(["tavern"]));
+    assert_eq!(json["active_choice_options"].as_array().unwrap().len(), 2);
+    assert_eq!(json["version"], 1);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn test_narrative_select_choice_round_trip(pool: PgPool) {
+    let session_id = Uuid::new_v4();
+
+    // Enter scene A with 2 choices
+    let app = common::build_test_app(pool.clone());
+    let (status, _) = common::post_json(
+        app,
+        "/api/v1/narrative/enter-scene",
+        &serde_json::json!({
+            "session_id": session_id,
+            "scene_id": "start",
+            "narrative_text": "You stand at the crossroads.",
+            "choices": [
+                { "label": "Go north", "target_scene_id": "forest" },
+                { "label": "Go south", "target_scene_id": "village" }
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Select choice 0 → transitions to forest
+    let app = common::build_test_app(pool.clone());
+    let (status, json) = common::post_json(
+        app,
+        "/api/v1/narrative/select-choice",
+        &serde_json::json!({
+            "session_id": session_id,
+            "choice_index": 0,
+            "target_scene": {
+                "scene_id": "forest",
+                "narrative_text": "You enter the dark forest.",
+                "choices": [
+                    { "label": "Return", "target_scene_id": "start" }
+                ]
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let event_ids = json["event_ids"].as_array().unwrap();
+    assert_eq!(event_ids.len(), 2); // ChoiceSelected + SceneStarted
+
+    // GET — verify session transitioned to forest
+    let app = common::build_test_app(pool);
+    let (status, json) = common::get_json(app, &format!("/api/v1/narrative/{session_id}")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["current_scene_id"], "forest");
+    assert_eq!(
+        json["scene_history"],
+        serde_json::json!(["start", "forest"])
+    );
+    assert_eq!(json["active_choice_options"].as_array().unwrap().len(), 1);
+    assert_eq!(json["version"], 3); // enter_scene(1) + choice_selected(2) + scene_started(3)
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn test_narrative_full_gameplay_loop(pool: PgPool) {
+    let session_id = Uuid::new_v4();
+
+    // Enter scene A
+    let app = common::build_test_app(pool.clone());
+    let (status, _) = common::post_json(
+        app,
+        "/api/v1/narrative/enter-scene",
+        &serde_json::json!({
+            "session_id": session_id,
+            "scene_id": "A",
+            "narrative_text": "Scene A.",
+            "choices": [{ "label": "Go to B", "target_scene_id": "B" }]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Select → B
+    let app = common::build_test_app(pool.clone());
+    let (status, _) = common::post_json(
+        app,
+        "/api/v1/narrative/select-choice",
+        &serde_json::json!({
+            "session_id": session_id,
+            "choice_index": 0,
+            "target_scene": {
+                "scene_id": "B",
+                "narrative_text": "Scene B.",
+                "choices": [{ "label": "Go to C", "target_scene_id": "C" }]
+            }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Select → C
+    let app = common::build_test_app(pool.clone());
+    let (status, _) = common::post_json(
+        app,
+        "/api/v1/narrative/select-choice",
+        &serde_json::json!({
+            "session_id": session_id,
+            "choice_index": 0,
+            "target_scene": {
+                "scene_id": "C",
+                "narrative_text": "Scene C.",
+                "choices": []
+            }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // GET — verify full history
+    let app = common::build_test_app(pool);
+    let (status, json) = common::get_json(app, &format!("/api/v1/narrative/{session_id}")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["current_scene_id"], "C");
+    assert_eq!(json["scene_history"], serde_json::json!(["A", "B", "C"]));
+    assert!(json["active_choice_options"].as_array().unwrap().is_empty());
+    assert_eq!(json["version"], 5); // enter(1) + choice+enter(3) + choice+enter(5)
+}
+
+#[sqlx::test(migrations = "../../migrations")]
 async fn test_narrative_command_on_archived_returns_error(pool: PgPool) {
     let session_id = Uuid::new_v4();
 

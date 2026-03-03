@@ -4,11 +4,34 @@ use otherworlds_core::event::{DomainEvent, EventMetadata};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use super::value_objects::ChoiceOption;
+
 /// Emitted when a new scene begins.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SceneStarted {
-    /// The scene identifier.
-    pub scene_id: Uuid,
+    /// The session this scene belongs to.
+    pub session_id: Uuid,
+    /// The scene identifier (author-defined).
+    pub scene_id: String,
+    /// The narrative text displayed to the player.
+    pub narrative_text: String,
+    /// The choices available in this scene.
+    pub choices: Vec<ChoiceOption>,
+    /// NPC references present in this scene.
+    pub npc_refs: Vec<String>,
+}
+
+/// Emitted when a player selects a choice, transitioning between scenes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChoiceSelected {
+    /// The session this choice belongs to.
+    pub session_id: Uuid,
+    /// The label of the selected choice.
+    pub choice_label: String,
+    /// The scene the player was in when they chose.
+    pub from_scene_id: String,
+    /// The scene the player transitions to.
+    pub to_scene_id: String,
 }
 
 /// Emitted when the narrative advances to the next beat.
@@ -45,6 +68,8 @@ pub enum NarrativeEventKind {
     BeatAdvanced(BeatAdvanced),
     /// A choice has been presented to the player.
     ChoicePresented(ChoicePresented),
+    /// A player has selected a choice, transitioning between scenes.
+    ChoiceSelected(ChoiceSelected),
     /// A session has been archived (soft-deleted).
     SessionArchived(SessionArchived),
 }
@@ -64,6 +89,7 @@ impl DomainEvent for NarrativeEvent {
             NarrativeEventKind::SceneStarted(_) => "narrative.scene_started",
             NarrativeEventKind::BeatAdvanced(_) => "narrative.beat_advanced",
             NarrativeEventKind::ChoicePresented(_) => "narrative.choice_presented",
+            NarrativeEventKind::ChoiceSelected(_) => "narrative.choice_selected",
             NarrativeEventKind::SessionArchived(_) => "narrative.session_archived",
         }
     }

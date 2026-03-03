@@ -15,7 +15,9 @@ use tracing::instrument;
 use uuid::Uuid;
 
 use crate::domain::aggregates::NarrativeSession;
-use crate::domain::commands::{AdvanceBeat, ArchiveSession, PresentChoice};
+use crate::domain::commands::{
+    AdvanceBeat, ArchiveSession, EnterScene, PresentChoice, SelectChoice,
+};
 use crate::domain::events::{NarrativeEvent, NarrativeEventKind};
 
 fn to_stored_event(event: &NarrativeEvent) -> StoredEvent {
@@ -182,6 +184,87 @@ pub async fn handle_archive_session(
     Ok(stored_events)
 }
 
+/// Handles the `EnterScene` command: reconstitutes the aggregate, enters
+/// the scene, and persists the resulting events.
+///
+/// # Errors
+///
+/// Returns `DomainError` if event loading, validation, or appending fails.
+#[instrument(skip(clock, rng, repo), fields(session_id = %command.session_id, correlation_id = %command.correlation_id))]
+pub async fn handle_enter_scene(
+    command: &EnterScene,
+    clock: &dyn Clock,
+    rng: &Mutex<dyn DeterministicRng + Send>,
+    repo: &dyn EventRepository,
+) -> Result<Vec<StoredEvent>, DomainError> {
+    let existing_events = repo.load_events(command.session_id).await?;
+    let mut session = reconstitute(command.session_id, &existing_events)?;
+
+    {
+        let mut rng_guard = rng
+            .lock()
+            .map_err(|e| DomainError::Infrastructure(format!("RNG mutex poisoned: {e}")))?;
+        session.enter_scene(
+            &command.scene_data,
+            command.correlation_id,
+            clock,
+            &mut *rng_guard,
+        )?;
+    }
+
+    let stored_events: Vec<StoredEvent> = session
+        .uncommitted_events()
+        .iter()
+        .map(to_stored_event)
+        .collect();
+
+    repo.append_events(command.session_id, session.version, &stored_events)
+        .await?;
+
+    Ok(stored_events)
+}
+
+/// Handles the `SelectChoice` command: reconstitutes the aggregate, selects
+/// the choice and transitions to the target scene, and persists the resulting events.
+///
+/// # Errors
+///
+/// Returns `DomainError` if event loading, validation, or appending fails.
+#[instrument(skip(clock, rng, repo), fields(session_id = %command.session_id, correlation_id = %command.correlation_id))]
+pub async fn handle_select_choice(
+    command: &SelectChoice,
+    clock: &dyn Clock,
+    rng: &Mutex<dyn DeterministicRng + Send>,
+    repo: &dyn EventRepository,
+) -> Result<Vec<StoredEvent>, DomainError> {
+    let existing_events = repo.load_events(command.session_id).await?;
+    let mut session = reconstitute(command.session_id, &existing_events)?;
+
+    {
+        let mut rng_guard = rng
+            .lock()
+            .map_err(|e| DomainError::Infrastructure(format!("RNG mutex poisoned: {e}")))?;
+        session.select_choice(
+            command.choice_index,
+            &command.target_scene_data,
+            command.correlation_id,
+            clock,
+            &mut *rng_guard,
+        )?;
+    }
+
+    let stored_events: Vec<StoredEvent> = session
+        .uncommitted_events()
+        .iter()
+        .map(to_stored_event)
+        .collect();
+
+    repo.append_events(command.session_id, session.version, &stored_events)
+        .await?;
+
+    Ok(stored_events)
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::{TimeZone, Utc};
@@ -191,10 +274,14 @@ mod tests {
     use otherworlds_core::repository::StoredEvent;
 
     use crate::application::command_handlers::{
-        handle_advance_beat, handle_archive_session, handle_present_choice,
+        handle_advance_beat, handle_archive_session, handle_enter_scene, handle_present_choice,
+        handle_select_choice,
     };
-    use crate::domain::commands::{AdvanceBeat, ArchiveSession, PresentChoice};
-    use crate::domain::events::{BeatAdvanced, NarrativeEventKind};
+    use crate::domain::commands::{
+        AdvanceBeat, ArchiveSession, EnterScene, PresentChoice, SelectChoice,
+    };
+    use crate::domain::events::{BeatAdvanced, NarrativeEventKind, SceneStarted};
+    use crate::domain::value_objects::{ChoiceOption, SceneData};
     use otherworlds_core::rng::DeterministicRng;
     use otherworlds_test_support::{
         ConflictingEventRepository, FixedClock, MockRng, RecordingEventRepository,
@@ -581,6 +668,257 @@ mod tests {
                 assert_eq!(aggregate_id, session_id);
                 assert_eq!(expected, 1);
                 assert_eq!(actual, 2);
+            }
+            other => panic!("expected ConcurrencyConflict, got {other:?}"),
+        }
+    }
+
+    fn sample_scene_data(scene_id: &str, choices: Vec<(&str, &str)>) -> SceneData {
+        SceneData {
+            scene_id: scene_id.to_owned(),
+            narrative_text: format!("You are in {scene_id}."),
+            choices: choices
+                .into_iter()
+                .map(|(label, target)| ChoiceOption {
+                    label: label.to_owned(),
+                    target_scene_id: target.to_owned(),
+                })
+                .collect(),
+            npc_refs: vec![],
+        }
+    }
+
+    fn scene_started_event(
+        session_id: Uuid,
+        scene_id: &str,
+        choices: Vec<ChoiceOption>,
+        fixed_now: chrono::DateTime<Utc>,
+        sequence_number: i64,
+    ) -> StoredEvent {
+        StoredEvent {
+            event_id: Uuid::new_v4(),
+            aggregate_id: session_id,
+            event_type: "narrative.scene_started".to_owned(),
+            payload: serde_json::to_value(NarrativeEventKind::SceneStarted(SceneStarted {
+                session_id,
+                scene_id: scene_id.to_owned(),
+                narrative_text: format!("You are in {scene_id}."),
+                choices,
+                npc_refs: vec![],
+            }))
+            .unwrap(),
+            sequence_number,
+            correlation_id: Uuid::new_v4(),
+            causation_id: Uuid::new_v4(),
+            occurred_at: fixed_now,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_enter_scene_persists_scene_started_event() {
+        // Arrange
+        let session_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
+        let repo = RecordingEventRepository::new(Ok(Vec::new()));
+
+        let command = EnterScene {
+            correlation_id,
+            session_id,
+            scene_data: sample_scene_data("tavern", vec![("Leave", "street")]),
+        };
+
+        // Act
+        let result = handle_enter_scene(&command, &clock, &*rng, &repo).await;
+
+        // Assert
+        assert!(result.is_ok());
+
+        let appended = repo.appended_events();
+        assert_eq!(appended.len(), 1);
+
+        let (agg_id, expected_version, events) = &appended[0];
+        assert_eq!(*agg_id, session_id);
+        assert_eq!(*expected_version, 0);
+        assert_eq!(events.len(), 1);
+
+        let stored = &events[0];
+        assert_eq!(stored.event_type, "narrative.scene_started");
+        assert_eq!(stored.aggregate_id, session_id);
+        assert_eq!(stored.correlation_id, correlation_id);
+    }
+
+    #[tokio::test]
+    async fn test_handle_enter_scene_rejects_archived_session() {
+        // Arrange
+        let session_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
+
+        let archived_event = StoredEvent {
+            event_id: Uuid::new_v4(),
+            aggregate_id: session_id,
+            event_type: "narrative.session_archived".to_owned(),
+            payload: serde_json::to_value(NarrativeEventKind::SessionArchived(
+                crate::domain::events::SessionArchived { session_id },
+            ))
+            .unwrap(),
+            sequence_number: 2,
+            correlation_id: Uuid::new_v4(),
+            causation_id: Uuid::new_v4(),
+            occurred_at: fixed_now,
+        };
+        let existing = vec![beat_advanced_event(session_id, fixed_now), archived_event];
+        let repo = RecordingEventRepository::new(Ok(existing));
+
+        let command = EnterScene {
+            correlation_id: Uuid::new_v4(),
+            session_id,
+            scene_data: sample_scene_data("tavern", vec![]),
+        };
+
+        // Act
+        let result = handle_enter_scene(&command, &clock, &*rng, &repo).await;
+
+        // Assert
+        match result.unwrap_err() {
+            DomainError::Validation(msg) => assert_eq!(msg, "session is archived"),
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_select_choice_persists_two_events() {
+        // Arrange
+        let session_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
+
+        let choices = vec![ChoiceOption {
+            label: "Go north".to_owned(),
+            target_scene_id: "forest".to_owned(),
+        }];
+        let existing = vec![scene_started_event(
+            session_id, "start", choices, fixed_now, 1,
+        )];
+        let repo = RecordingEventRepository::new(Ok(existing));
+
+        let command = SelectChoice {
+            correlation_id,
+            session_id,
+            choice_index: 0,
+            target_scene_data: sample_scene_data("forest", vec![("Return", "start")]),
+        };
+
+        // Act
+        let result = handle_select_choice(&command, &clock, &*rng, &repo).await;
+
+        // Assert
+        assert!(result.is_ok());
+
+        let appended = repo.appended_events();
+        assert_eq!(appended.len(), 1);
+
+        let (_, expected_version, events) = &appended[0];
+        assert_eq!(*expected_version, 1);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].event_type, "narrative.choice_selected");
+        assert_eq!(events[1].event_type, "narrative.scene_started");
+    }
+
+    #[tokio::test]
+    async fn test_handle_select_choice_rejects_no_active_scene() {
+        // Arrange
+        let session_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
+        let repo = RecordingEventRepository::new(Ok(Vec::new()));
+
+        let command = SelectChoice {
+            correlation_id: Uuid::new_v4(),
+            session_id,
+            choice_index: 0,
+            target_scene_data: sample_scene_data("next", vec![]),
+        };
+
+        // Act
+        let result = handle_select_choice(&command, &clock, &*rng, &repo).await;
+
+        // Assert
+        match result.unwrap_err() {
+            DomainError::Validation(msg) => assert_eq!(msg, "no active scene"),
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_select_choice_rejects_out_of_bounds() {
+        // Arrange
+        let session_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
+
+        let choices = vec![ChoiceOption {
+            label: "Go north".to_owned(),
+            target_scene_id: "forest".to_owned(),
+        }];
+        let existing = vec![scene_started_event(
+            session_id, "start", choices, fixed_now, 1,
+        )];
+        let repo = RecordingEventRepository::new(Ok(existing));
+
+        let command = SelectChoice {
+            correlation_id: Uuid::new_v4(),
+            session_id,
+            choice_index: 5,
+            target_scene_data: sample_scene_data("forest", vec![]),
+        };
+
+        // Act
+        let result = handle_select_choice(&command, &clock, &*rng, &repo).await;
+
+        // Assert
+        match result.unwrap_err() {
+            DomainError::Validation(msg) => assert!(msg.contains("choice index 5 out of bounds")),
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_enter_scene_propagates_concurrency_conflict() {
+        // Arrange
+        let session_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
+        let repo = ConflictingEventRepository::new(vec![], session_id, 0, 1);
+
+        let command = EnterScene {
+            correlation_id: Uuid::new_v4(),
+            session_id,
+            scene_data: sample_scene_data("tavern", vec![]),
+        };
+
+        // Act
+        let result = handle_enter_scene(&command, &clock, &*rng, &repo).await;
+
+        // Assert
+        match result.unwrap_err() {
+            DomainError::ConcurrencyConflict {
+                aggregate_id,
+                expected,
+                actual,
+            } => {
+                assert_eq!(aggregate_id, session_id);
+                assert_eq!(expected, 0);
+                assert_eq!(actual, 1);
             }
             other => panic!("expected ConcurrencyConflict, got {other:?}"),
         }

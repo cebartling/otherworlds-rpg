@@ -14,6 +14,7 @@ use otherworlds_narrative::application::query_handlers::{
 };
 use otherworlds_narrative::application::{command_handlers, query_handlers};
 use otherworlds_narrative::domain::commands;
+use otherworlds_narrative::domain::value_objects::{ChoiceOption, SceneData};
 
 use crate::error::ApiError;
 use crate::state::AppState;
@@ -30,6 +31,56 @@ pub struct AdvanceBeatRequest {
 pub struct PresentChoiceRequest {
     /// The narrative session to present a choice in.
     pub session_id: Uuid,
+}
+
+/// A choice option in a request body.
+#[derive(Debug, Deserialize)]
+pub struct ChoiceOptionRequest {
+    /// The display label for this choice.
+    pub label: String,
+    /// The scene ID this choice transitions to.
+    pub target_scene_id: String,
+}
+
+/// Request body for POST /enter-scene.
+#[derive(Debug, Deserialize)]
+pub struct EnterSceneRequest {
+    /// The narrative session to enter a scene in.
+    pub session_id: Uuid,
+    /// The scene identifier.
+    pub scene_id: String,
+    /// The narrative text for this scene.
+    pub narrative_text: String,
+    /// The choices available in this scene.
+    pub choices: Vec<ChoiceOptionRequest>,
+    /// NPC references present in this scene.
+    #[serde(default)]
+    pub npc_refs: Vec<String>,
+}
+
+/// Nested target scene data for select-choice.
+#[derive(Debug, Deserialize)]
+pub struct TargetSceneRequest {
+    /// The scene identifier to transition to.
+    pub scene_id: String,
+    /// The narrative text for the target scene.
+    pub narrative_text: String,
+    /// The choices available in the target scene.
+    pub choices: Vec<ChoiceOptionRequest>,
+    /// NPC references present in the target scene.
+    #[serde(default)]
+    pub npc_refs: Vec<String>,
+}
+
+/// Request body for POST /select-choice.
+#[derive(Debug, Deserialize)]
+pub struct SelectChoiceRequest {
+    /// The narrative session to select a choice in.
+    pub session_id: Uuid,
+    /// The index of the choice to select.
+    pub choice_index: usize,
+    /// The target scene to transition to.
+    pub target_scene: TargetSceneRequest,
 }
 
 /// Response body returned after a command is successfully handled.
@@ -79,6 +130,90 @@ async fn present_choice(
     info!(correlation_id = %command.correlation_id, "handling present_choice command");
 
     let stored_events = command_handlers::handle_present_choice(
+        &command,
+        state.clock.as_ref(),
+        &*state.rng,
+        &*state.event_repository,
+    )
+    .await?;
+
+    let event_ids = stored_events.iter().map(|e| e.event_id).collect();
+
+    Ok(Json(CommandResponse { event_ids }))
+}
+
+/// POST /enter-scene
+#[instrument(skip(state, request), fields(session_id = %request.session_id))]
+async fn enter_scene(
+    State(state): State<AppState>,
+    Json(request): Json<EnterSceneRequest>,
+) -> Result<Json<CommandResponse>, ApiError> {
+    let scene_data = SceneData {
+        scene_id: request.scene_id,
+        narrative_text: request.narrative_text,
+        choices: request
+            .choices
+            .into_iter()
+            .map(|c| ChoiceOption {
+                label: c.label,
+                target_scene_id: c.target_scene_id,
+            })
+            .collect(),
+        npc_refs: request.npc_refs,
+    };
+
+    let command = commands::EnterScene {
+        correlation_id: Uuid::new_v4(),
+        session_id: request.session_id,
+        scene_data,
+    };
+
+    info!(correlation_id = %command.correlation_id, "handling enter_scene command");
+
+    let stored_events = command_handlers::handle_enter_scene(
+        &command,
+        state.clock.as_ref(),
+        &*state.rng,
+        &*state.event_repository,
+    )
+    .await?;
+
+    let event_ids = stored_events.iter().map(|e| e.event_id).collect();
+
+    Ok(Json(CommandResponse { event_ids }))
+}
+
+/// POST /select-choice
+#[instrument(skip(state, request), fields(session_id = %request.session_id))]
+async fn select_choice(
+    State(state): State<AppState>,
+    Json(request): Json<SelectChoiceRequest>,
+) -> Result<Json<CommandResponse>, ApiError> {
+    let target_scene_data = SceneData {
+        scene_id: request.target_scene.scene_id,
+        narrative_text: request.target_scene.narrative_text,
+        choices: request
+            .target_scene
+            .choices
+            .into_iter()
+            .map(|c| ChoiceOption {
+                label: c.label,
+                target_scene_id: c.target_scene_id,
+            })
+            .collect(),
+        npc_refs: request.target_scene.npc_refs,
+    };
+
+    let command = commands::SelectChoice {
+        correlation_id: Uuid::new_v4(),
+        session_id: request.session_id,
+        choice_index: request.choice_index,
+        target_scene_data,
+    };
+
+    info!(correlation_id = %command.correlation_id, "handling select_choice command");
+
+    let stored_events = command_handlers::handle_select_choice(
         &command,
         state.clock.as_ref(),
         &*state.rng,
@@ -143,6 +278,8 @@ pub fn router() -> Router<AppState> {
         .route("/{session_id}", get(get_session).delete(archive_session))
         .route("/advance-beat", post(advance_beat))
         .route("/present-choice", post(present_choice))
+        .route("/enter-scene", post(enter_scene))
+        .route("/select-choice", post(select_choice))
 }
 
 #[cfg(test)]
@@ -654,5 +791,181 @@ mod tests {
                 .unwrap()
                 .contains("expected version")
         );
+    }
+
+    #[tokio::test]
+    async fn test_enter_scene_returns_200_with_event_ids() {
+        // Arrange
+        let app = router().with_state(test_app_state());
+        let session_id = Uuid::new_v4();
+        let body = serde_json::json!({
+            "session_id": session_id,
+            "scene_id": "tavern",
+            "narrative_text": "You enter the tavern.",
+            "choices": [
+                { "label": "Leave", "target_scene_id": "street" }
+            ],
+            "npc_refs": ["barkeep"]
+        });
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/enter-scene")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        let event_ids = json["event_ids"].as_array().unwrap();
+        assert_eq!(event_ids.len(), 1);
+        for id in event_ids {
+            Uuid::parse_str(id.as_str().unwrap()).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn test_enter_scene_returns_422_for_missing_body() {
+        // Arrange
+        let app = router().with_state(test_app_state());
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/enter-scene")
+            .header("content-type", "application/json")
+            .body(Body::from("{}"))
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn test_enter_scene_returns_500_when_repository_fails() {
+        // Arrange
+        let app = router().with_state(failing_app_state());
+        let session_id = Uuid::new_v4();
+        let body = serde_json::json!({
+            "session_id": session_id,
+            "scene_id": "tavern",
+            "narrative_text": "You enter the tavern.",
+            "choices": []
+        });
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/enter-scene")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        assert_eq!(json["error"], "infrastructure_error");
+    }
+
+    #[tokio::test]
+    async fn test_select_choice_returns_422_for_missing_body() {
+        // Arrange
+        let app = router().with_state(test_app_state());
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/select-choice")
+            .header("content-type", "application/json")
+            .body(Body::from("{}"))
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn test_select_choice_returns_400_when_no_active_scene() {
+        // Arrange — empty repo means no active scene
+        let app = router().with_state(test_app_state());
+        let session_id = Uuid::new_v4();
+        let body = serde_json::json!({
+            "session_id": session_id,
+            "choice_index": 0,
+            "target_scene": {
+                "scene_id": "forest",
+                "narrative_text": "You enter the forest.",
+                "choices": []
+            }
+        });
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/select-choice")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert — validation error maps to 400
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_select_choice_returns_500_when_repository_fails() {
+        // Arrange
+        let app = router().with_state(failing_app_state());
+        let session_id = Uuid::new_v4();
+        let body = serde_json::json!({
+            "session_id": session_id,
+            "choice_index": 0,
+            "target_scene": {
+                "scene_id": "forest",
+                "narrative_text": "You enter the forest.",
+                "choices": []
+            }
+        });
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/select-choice")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap();
+
+        // Act
+        let response = app.oneshot(request).await.unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        assert_eq!(json["error"], "infrastructure_error");
     }
 }

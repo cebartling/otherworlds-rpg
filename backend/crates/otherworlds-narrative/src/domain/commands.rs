@@ -3,6 +3,8 @@
 use otherworlds_core::command::Command;
 use uuid::Uuid;
 
+use super::value_objects::SceneData;
+
 /// Command to advance the current narrative beat.
 #[derive(Debug, Clone)]
 pub struct AdvanceBeat {
@@ -34,6 +36,50 @@ pub struct PresentChoice {
 impl Command for PresentChoice {
     fn command_type(&self) -> &'static str {
         "narrative.present_choice"
+    }
+
+    fn correlation_id(&self) -> Uuid {
+        self.correlation_id
+    }
+}
+
+/// Command to enter a scene in the narrative session.
+#[derive(Debug, Clone)]
+pub struct EnterScene {
+    /// The correlation ID for tracing.
+    pub correlation_id: Uuid,
+    /// The session to enter the scene in.
+    pub session_id: Uuid,
+    /// The scene data to enter.
+    pub scene_data: SceneData,
+}
+
+impl Command for EnterScene {
+    fn command_type(&self) -> &'static str {
+        "narrative.enter_scene"
+    }
+
+    fn correlation_id(&self) -> Uuid {
+        self.correlation_id
+    }
+}
+
+/// Command to select a choice and transition to the next scene.
+#[derive(Debug, Clone)]
+pub struct SelectChoice {
+    /// The correlation ID for tracing.
+    pub correlation_id: Uuid,
+    /// The session to select the choice in.
+    pub session_id: Uuid,
+    /// The index of the choice to select.
+    pub choice_index: usize,
+    /// The target scene data to transition to.
+    pub target_scene_data: SceneData,
+}
+
+impl Command for SelectChoice {
+    fn command_type(&self) -> &'static str {
+        "narrative.select_choice"
     }
 
     fn correlation_id(&self) -> Uuid {
