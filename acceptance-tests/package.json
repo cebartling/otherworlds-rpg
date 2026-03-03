@@ -1,0 +1,13 @@
+{
+  "name": "acceptance-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bunx playwright test",
+    "test:ui": "bunx playwright test --ui"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "@types/node": "^25.3.3"
+  }
+}

@@ -5,8 +5,9 @@ import {
   compileCampaign,
   archiveCampaign,
 } from '$lib/server/api/content';
+import { ApiClientError } from '$lib/server/api/client';
 import { handleLoadError } from '$lib/server/api/errors';
-import { redirect } from '@sveltejs/kit';
+import { fail, redirect } from '@sveltejs/kit';
 
 export const load: PageServerLoad = async ({ params }) => {
   try {
@@ -22,6 +23,9 @@ export const actions: Actions = {
     try {
       await validateCampaign({ campaign_id: params.campaign_id });
     } catch (err) {
+      if (err instanceof ApiClientError && err.status >= 400 && err.status < 500) {
+        return fail(err.status, { action: 'validate', error: err.errorResponse.message });
+      }
       handleLoadError(err);
     }
 
@@ -32,6 +36,9 @@ export const actions: Actions = {
     try {
       await compileCampaign({ campaign_id: params.campaign_id });
     } catch (err) {
+      if (err instanceof ApiClientError && err.status >= 400 && err.status < 500) {
+        return fail(err.status, { action: 'compile', error: err.errorResponse.message });
+      }
       handleLoadError(err);
     }
 

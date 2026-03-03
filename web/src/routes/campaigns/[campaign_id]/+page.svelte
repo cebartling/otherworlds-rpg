@@ -153,6 +153,17 @@
   </section>
 
   <!-- Actions -->
+  {#if form?.error}
+    <div
+      class="rounded-lg p-4"
+      style="background-color: rgba(198, 40, 40, 0.15); border: 1px solid #c62828;"
+    >
+      <p class="text-sm" style="color: #e57373;">
+        {form.error}
+      </p>
+    </div>
+  {/if}
+
   {#if form?.success}
     <div
       class="rounded-lg p-4"

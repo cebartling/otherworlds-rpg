@@ -2,11 +2,12 @@ import { test, expect } from '@playwright/test';
 
 test('home page loads with expected content', async ({ page }) => {
   await page.goto('/');
-  await expect(page.locator('h1')).toHaveText('Welcome to SvelteKit');
+  await expect(page.locator('h1')).toContainText('Otherworlds RPG');
 });
 
-test('home page has a link to SvelteKit docs', async ({ page }) => {
+test('home page has navigation links', async ({ page }) => {
   await page.goto('/');
-  const docsLink = page.locator('a[href="https://svelte.dev/docs/kit"]');
-  await expect(docsLink).toBeVisible();
+  await expect(page.locator('nav a[href="/campaigns"]')).toBeVisible();
+  await expect(page.locator('nav a[href="/characters"]')).toBeVisible();
+  await expect(page.locator('nav a[href="/sessions"]')).toBeVisible();
 });
