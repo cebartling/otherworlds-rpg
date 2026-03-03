@@ -1,13 +1,10 @@
 import { test, expect, type Page } from '@playwright/test';
 
 const VALID_CAMPAIGN_SOURCE = `---
-title: Test Campaign
-description: A test campaign for acceptance testing
+title: "Test Campaign"
 ---
 
-# Act 1: The Beginning
-
-## Scene 1: Arrival
+# Scene: start
 
 The adventurers arrive at the village square.
 `;
@@ -18,14 +15,19 @@ const INVALID_CAMPAIGN_SOURCE = 'This has no YAML front-matter and no scenes.';
  * Helper: ingest a campaign via the textarea form and return the new campaign ID.
  */
 async function ingestCampaign(page: Page, source: string): Promise<string> {
-  await page.goto('/campaigns');
+  await page.goto('/campaigns', { waitUntil: 'networkidle' });
 
-  // Open the ingest form
-  await page.getByRole('button', { name: 'Ingest Campaign' }).click();
+  // Open the ingest form (toggle button reveals the textarea)
+  const toggleButton = page.getByRole('button', { name: 'Ingest Campaign' });
+  await toggleButton.click();
+
+  // Wait for the button text to change to "Cancel" (confirms JS hydration + toggle)
+  await expect(page.getByRole('button', { name: 'Cancel' })).toBeVisible({ timeout: 10_000 });
 
   // Fill and submit
-  await page.locator('#campaign-source').fill(source);
-  await page.getByRole('button', { name: 'Ingest' }).click();
+  const textarea = page.locator('#campaign-source');
+  await textarea.fill(source);
+  await page.getByRole('button', { name: 'Ingest', exact: true }).click();
 
   // Wait for redirect to /campaigns/<uuid>
   await page.waitForURL(/\/campaigns\/[0-9a-f-]{36}$/);
