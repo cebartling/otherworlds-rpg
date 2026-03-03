@@ -61,6 +61,10 @@ jobs:
     name: Web Client Tests
     runs-on: ubuntu-latest
 
+    env:
+      API_BASE_URL: http://localhost:3000
+      PUBLIC_APP_NAME: Otherworlds RPG
+
     defaults:
       run:
         working-directory: web
