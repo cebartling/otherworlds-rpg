@@ -43,6 +43,11 @@ export default async function globalSetup() {
     'docker compose exec -T postgres psql -U otherworlds -d otherworlds -f /dev/stdin < backend/migrations/20260301000001_add_event_type_index.sql',
   );
 
+  console.log('[acceptance] Clearing stale test data...');
+  run(
+    "docker compose exec -T postgres psql -U otherworlds -d otherworlds -c 'TRUNCATE domain_events'",
+  );
+
   console.log('[acceptance] Building and starting API...');
   run('docker compose up api -d --build');
 
