@@ -11,6 +11,7 @@ use otherworlds_core::error::DomainError;
 use otherworlds_core::event::DomainEvent;
 use otherworlds_core::repository::{EventRepository, StoredEvent};
 use otherworlds_core::rng::DeterministicRng;
+use tracing::instrument;
 use uuid::Uuid;
 
 use crate::domain::aggregates::Character;
@@ -71,6 +72,7 @@ pub(crate) fn reconstitute(
 /// # Errors
 ///
 /// Returns `DomainError` if event appending fails.
+#[instrument(skip(clock, rng, repo), fields(character_id = %command.character_id, correlation_id = %command.correlation_id))]
 pub async fn handle_create_character(
     command: &CreateCharacter,
     clock: &dyn Clock,
@@ -116,6 +118,7 @@ pub async fn handle_create_character(
 /// # Errors
 ///
 /// Returns `DomainError` if event loading or appending fails.
+#[instrument(skip(clock, rng, repo), fields(character_id = %command.character_id, correlation_id = %command.correlation_id))]
 pub async fn handle_modify_attribute(
     command: &ModifyAttribute,
     clock: &dyn Clock,
@@ -169,6 +172,7 @@ pub async fn handle_modify_attribute(
 /// # Errors
 ///
 /// Returns `DomainError` if event loading or appending fails.
+#[instrument(skip(clock, rng, repo), fields(character_id = %command.character_id, correlation_id = %command.correlation_id))]
 pub async fn handle_award_experience(
     command: &AwardExperience,
     clock: &dyn Clock,
@@ -223,6 +227,7 @@ pub async fn handle_award_experience(
 /// Returns `DomainError::AggregateNotFound` if no events exist for the character.
 /// Returns `DomainError::Validation` if the character is already archived.
 /// Returns `DomainError` if event appending fails.
+#[instrument(skip(clock, rng, repo), fields(character_id = %command.character_id, correlation_id = %command.correlation_id))]
 pub async fn handle_archive_character(
     command: &ArchiveCharacter,
     clock: &dyn Clock,

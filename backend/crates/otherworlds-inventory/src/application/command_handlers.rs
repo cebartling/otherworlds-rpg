@@ -11,6 +11,7 @@ use otherworlds_core::error::DomainError;
 use otherworlds_core::event::DomainEvent;
 use otherworlds_core::repository::{EventRepository, StoredEvent};
 use otherworlds_core::rng::DeterministicRng;
+use tracing::instrument;
 use uuid::Uuid;
 
 use crate::domain::aggregates::Inventory;
@@ -78,6 +79,7 @@ pub(crate) fn reconstitute(
 /// # Errors
 ///
 /// Returns `DomainError` if event loading or appending fails.
+#[instrument(skip(clock, rng, repo), fields(inventory_id = %command.inventory_id, correlation_id = %command.correlation_id))]
 pub async fn handle_add_item(
     command: &AddItem,
     clock: &dyn Clock,
@@ -127,6 +129,7 @@ pub async fn handle_add_item(
 /// # Errors
 ///
 /// Returns `DomainError` if event loading or appending fails.
+#[instrument(skip(clock, rng, repo), fields(inventory_id = %command.inventory_id, correlation_id = %command.correlation_id))]
 pub async fn handle_remove_item(
     command: &RemoveItem,
     clock: &dyn Clock,
@@ -176,6 +179,7 @@ pub async fn handle_remove_item(
 /// # Errors
 ///
 /// Returns `DomainError` if event loading or appending fails.
+#[instrument(skip(clock, rng, repo), fields(inventory_id = %command.inventory_id, correlation_id = %command.correlation_id))]
 pub async fn handle_equip_item(
     command: &EquipItem,
     clock: &dyn Clock,
@@ -225,6 +229,7 @@ pub async fn handle_equip_item(
 /// # Errors
 ///
 /// Returns `DomainError` if event loading or appending fails.
+#[instrument(skip(clock, rng, repo), fields(inventory_id = %command.inventory_id, correlation_id = %command.correlation_id))]
 pub async fn handle_archive_inventory(
     command: &ArchiveInventory,
     clock: &dyn Clock,

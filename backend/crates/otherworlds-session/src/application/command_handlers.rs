@@ -11,6 +11,7 @@ use otherworlds_core::error::DomainError;
 use otherworlds_core::event::DomainEvent;
 use otherworlds_core::repository::{EventRepository, StoredEvent};
 use otherworlds_core::rng::DeterministicRng;
+use tracing::instrument;
 use uuid::Uuid;
 
 use crate::domain::aggregates::CampaignRun;
@@ -80,6 +81,7 @@ pub(crate) fn reconstitute(
 /// # Errors
 ///
 /// Returns `DomainError` if event appending fails.
+#[instrument(skip(clock, rng, repo), fields(campaign_id = %command.campaign_id, correlation_id = %command.correlation_id))]
 pub async fn handle_start_campaign_run(
     command: &StartCampaignRun,
     clock: &dyn Clock,
@@ -127,6 +129,7 @@ pub async fn handle_start_campaign_run(
 /// # Errors
 ///
 /// Returns `DomainError` if event loading or appending fails.
+#[instrument(skip(clock, rng, repo), fields(run_id = %command.run_id, correlation_id = %command.correlation_id))]
 pub async fn handle_create_checkpoint(
     command: &CreateCheckpoint,
     clock: &dyn Clock,
@@ -171,6 +174,7 @@ pub async fn handle_create_checkpoint(
 /// # Errors
 ///
 /// Returns `DomainError` if event loading or appending fails.
+#[instrument(skip(clock, rng, repo), fields(source_run_id = %command.source_run_id, correlation_id = %command.correlation_id))]
 pub async fn handle_branch_timeline(
     command: &BranchTimeline,
     clock: &dyn Clock,
@@ -231,6 +235,7 @@ pub async fn handle_branch_timeline(
 /// Returns `DomainError::AggregateNotFound` if no events exist for the run ID.
 /// Returns `DomainError::Validation` if the campaign run is already archived.
 /// Returns `DomainError` if event loading or appending fails.
+#[instrument(skip(clock, rng, repo), fields(run_id = %command.run_id, correlation_id = %command.correlation_id))]
 pub async fn handle_archive_campaign_run(
     command: &ArchiveCampaignRun,
     clock: &dyn Clock,

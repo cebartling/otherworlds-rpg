@@ -11,6 +11,7 @@ use otherworlds_core::error::DomainError;
 use otherworlds_core::event::DomainEvent;
 use otherworlds_core::repository::{EventRepository, StoredEvent};
 use otherworlds_core::rng::DeterministicRng;
+use tracing::instrument;
 use uuid::Uuid;
 
 use crate::domain::aggregates::NarrativeSession;
@@ -69,6 +70,7 @@ pub(crate) fn reconstitute(
 /// # Errors
 ///
 /// Returns `DomainError` if event loading or appending fails.
+#[instrument(skip(clock, rng, repo), fields(session_id = %command.session_id, correlation_id = %command.correlation_id))]
 pub async fn handle_advance_beat(
     command: &AdvanceBeat,
     clock: &dyn Clock,
@@ -107,6 +109,7 @@ pub async fn handle_advance_beat(
 /// # Errors
 ///
 /// Returns `DomainError` if event loading or appending fails.
+#[instrument(skip(clock, rng, repo), fields(session_id = %command.session_id, correlation_id = %command.correlation_id))]
 pub async fn handle_present_choice(
     command: &PresentChoice,
     clock: &dyn Clock,
@@ -147,6 +150,7 @@ pub async fn handle_present_choice(
 /// Returns `DomainError::AggregateNotFound` if no events exist for the session.
 /// Returns `DomainError::Validation` if the session is already archived.
 /// Returns `DomainError` if event appending fails.
+#[instrument(skip(clock, rng, repo), fields(session_id = %command.session_id, correlation_id = %command.correlation_id))]
 pub async fn handle_archive_session(
     command: &ArchiveSession,
     clock: &dyn Clock,

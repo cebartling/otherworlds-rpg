@@ -11,6 +11,7 @@ use otherworlds_core::error::DomainError;
 use otherworlds_core::event::DomainEvent;
 use otherworlds_core::repository::{EventRepository, StoredEvent};
 use otherworlds_core::rng::DeterministicRng;
+use tracing::instrument;
 use uuid::Uuid;
 
 use crate::domain::aggregates::Campaign;
@@ -80,6 +81,7 @@ pub(crate) fn reconstitute(
 /// # Errors
 ///
 /// Returns `DomainError` if event appending fails.
+#[instrument(skip(clock, rng, repo), fields(correlation_id = %command.correlation_id))]
 pub async fn handle_ingest_campaign(
     command: &IngestCampaign,
     clock: &dyn Clock,
@@ -127,6 +129,7 @@ pub async fn handle_ingest_campaign(
 /// # Errors
 ///
 /// Returns `DomainError` if event loading or appending fails.
+#[instrument(skip(clock, rng, repo), fields(campaign_id = %command.campaign_id, correlation_id = %command.correlation_id))]
 pub async fn handle_validate_campaign(
     command: &ValidateCampaign,
     clock: &dyn Clock,
@@ -170,6 +173,7 @@ pub async fn handle_validate_campaign(
 /// # Errors
 ///
 /// Returns `DomainError` if event loading or appending fails.
+#[instrument(skip(clock, rng, repo), fields(campaign_id = %command.campaign_id, correlation_id = %command.correlation_id))]
 pub async fn handle_compile_campaign(
     command: &CompileCampaign,
     clock: &dyn Clock,
@@ -214,6 +218,7 @@ pub async fn handle_compile_campaign(
 ///
 /// Returns `DomainError::AggregateNotFound` if no events exist for the campaign.
 /// Returns `DomainError::Validation` if the campaign is already archived.
+#[instrument(skip(clock, rng, repo), fields(campaign_id = %command.campaign_id, correlation_id = %command.correlation_id))]
 pub async fn handle_archive_campaign(
     command: &ArchiveCampaign,
     clock: &dyn Clock,

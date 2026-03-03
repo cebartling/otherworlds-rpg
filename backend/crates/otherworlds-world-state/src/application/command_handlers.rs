@@ -11,6 +11,7 @@ use otherworlds_core::error::DomainError;
 use otherworlds_core::event::DomainEvent;
 use otherworlds_core::repository::{EventRepository, StoredEvent};
 use otherworlds_core::rng::DeterministicRng;
+use tracing::instrument;
 use uuid::Uuid;
 
 use crate::domain::aggregates::WorldSnapshot;
@@ -69,6 +70,7 @@ pub(crate) fn reconstitute(
 /// # Errors
 ///
 /// Returns `DomainError` if validation fails or event persistence fails.
+#[instrument(skip(clock, rng, repo), fields(world_id = %command.world_id, correlation_id = %command.correlation_id))]
 pub async fn handle_apply_effect(
     command: &ApplyEffect,
     clock: &dyn Clock,
@@ -116,6 +118,7 @@ pub async fn handle_apply_effect(
 /// # Errors
 ///
 /// Returns `DomainError` if validation fails or event persistence fails.
+#[instrument(skip(clock, rng, repo), fields(world_id = %command.world_id, correlation_id = %command.correlation_id))]
 pub async fn handle_set_flag(
     command: &SetFlag,
     clock: &dyn Clock,
@@ -164,6 +167,7 @@ pub async fn handle_set_flag(
 /// # Errors
 ///
 /// Returns `DomainError` if event loading or appending fails.
+#[instrument(skip(clock, rng, repo), fields(world_id = %command.world_id, correlation_id = %command.correlation_id))]
 pub async fn handle_update_disposition(
     command: &UpdateDisposition,
     clock: &dyn Clock,
@@ -208,6 +212,7 @@ pub async fn handle_update_disposition(
 ///
 /// Returns `DomainError::AggregateNotFound` if the world snapshot does not exist.
 /// Returns `DomainError::Validation` if the world snapshot is already archived.
+#[instrument(skip(clock, rng, repo), fields(world_id = %command.world_id, correlation_id = %command.correlation_id))]
 pub async fn handle_archive_world_snapshot(
     command: &ArchiveWorldSnapshot,
     clock: &dyn Clock,

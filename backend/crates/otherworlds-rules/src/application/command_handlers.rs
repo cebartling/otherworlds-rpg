@@ -11,6 +11,7 @@ use otherworlds_core::error::DomainError;
 use otherworlds_core::event::DomainEvent;
 use otherworlds_core::repository::{EventRepository, StoredEvent};
 use otherworlds_core::rng::DeterministicRng;
+use tracing::instrument;
 use uuid::Uuid;
 
 use crate::domain::aggregates::{DeclareIntentParams, Resolution};
@@ -70,6 +71,7 @@ pub(crate) fn reconstitute(
 /// # Errors
 ///
 /// Returns `DomainError` if event loading, validation, or appending fails.
+#[instrument(skip(clock, rng, repo), fields(resolution_id = %command.resolution_id, correlation_id = %command.correlation_id))]
 pub async fn handle_declare_intent(
     command: &DeclareIntent,
     clock: &dyn Clock,
@@ -123,6 +125,7 @@ pub async fn handle_declare_intent(
 /// # Errors
 ///
 /// Returns `DomainError` if event loading, validation, or appending fails.
+#[instrument(skip(clock, rng, repo), fields(resolution_id = %command.resolution_id, correlation_id = %command.correlation_id))]
 pub async fn handle_resolve_check(
     command: &ResolveCheck,
     clock: &dyn Clock,
@@ -162,6 +165,7 @@ pub async fn handle_resolve_check(
 /// # Errors
 ///
 /// Returns `DomainError` if event loading, validation, or appending fails.
+#[instrument(skip(clock, rng, repo), fields(resolution_id = %command.resolution_id, correlation_id = %command.correlation_id))]
 pub async fn handle_produce_effects(
     command: &ProduceEffects,
     clock: &dyn Clock,
@@ -209,6 +213,7 @@ pub async fn handle_produce_effects(
 /// Returns `DomainError::AggregateNotFound` if no events exist for the resolution.
 /// Returns `DomainError::Validation` if the resolution is already archived.
 /// Returns `DomainError` if event loading or appending fails.
+#[instrument(skip(clock, rng, repo), fields(resolution_id = %command.resolution_id, correlation_id = %command.correlation_id))]
 pub async fn handle_archive_resolution(
     command: &ArchiveResolution,
     clock: &dyn Clock,

@@ -1047,6 +1047,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
+ "tracing",
  "uuid",
 ]
 
@@ -1065,6 +1066,7 @@ dependencies = [
  "sha2",
  "thiserror",
  "tokio",
+ "tracing",
  "uuid",
 ]
 
@@ -1109,6 +1111,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
+ "tracing",
  "uuid",
 ]
 
@@ -1124,6 +1127,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
+ "tracing",
  "uuid",
 ]
 
@@ -1139,6 +1143,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
+ "tracing",
  "uuid",
 ]
 
@@ -1154,6 +1159,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
+ "tracing",
  "uuid",
 ]
 
@@ -1180,6 +1186,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
+ "tracing",
  "uuid",
 ]
 
