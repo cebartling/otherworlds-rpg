@@ -2,9 +2,11 @@ import SwiftUI
 
 @main
 struct OtherworldsApp: App {
+    @State private var configuration = AppConfiguration()
+
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            AppTabView(configuration: configuration)
         }
     }
 }
