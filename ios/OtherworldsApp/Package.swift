@@ -10,7 +10,10 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "OtherworldsApp",
-            path: "Sources/OtherworldsApp"
+            path: "Sources/OtherworldsApp",
+            resources: [
+                .process("Resources"),
+            ]
         ),
         .testTarget(
             name: "OtherworldsAppTests",
