@@ -18,21 +18,25 @@ const GREEN_STYLE = /background-color: (#2e7d32|rgb\(46, 125, 50\))/;
 const GRAY_STYLE = /border: 1px solid var\(--color-border\)/;
 
 /**
- * Helper: ingest a campaign via the textarea form and return the new campaign ID.
+ * Helper: ingest a campaign via file upload and return the new campaign ID.
  */
 async function ingestCampaign(page: Page, source: string): Promise<string> {
   await page.goto('/campaigns', { waitUntil: 'networkidle' });
 
-  // Open the ingest form (toggle button reveals the textarea)
+  // Open the ingest form (toggle button reveals the file input)
   const toggleButton = page.getByRole('button', { name: 'Ingest Campaign' });
   await toggleButton.click();
 
   // Wait for the button text to change to "Cancel" (confirms JS hydration + toggle)
   await expect(page.getByRole('button', { name: 'Cancel' })).toBeVisible({ timeout: 10_000 });
 
-  // Fill and submit
-  const textarea = page.locator('#campaign-source');
-  await textarea.fill(source);
+  // Upload file and submit
+  const fileInput = page.locator('#campaign-file');
+  await fileInput.setInputFiles({
+    name: 'campaign.md',
+    mimeType: 'text/markdown',
+    buffer: Buffer.from(source, 'utf-8'),
+  });
   await page.getByRole('button', { name: 'Ingest', exact: true }).click();
 
   // Wait for redirect to /campaigns/<uuid>
@@ -58,7 +62,7 @@ function pipelineStepCircle(page: Page, stepNumber: number) {
 
 test.describe('Campaign Pipeline', () => {
 
-  test('ingest campaign via textarea form', async ({ page }) => {
+  test('ingest campaign via file upload', async ({ page }) => {
     const campaignId = await ingestCampaign(page, VALID_CAMPAIGN_SOURCE);
 
     // Should be on the detail page with a valid UUID

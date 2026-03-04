@@ -15,9 +15,19 @@ export const load: PageServerLoad = async () => {
 export const actions: Actions = {
   ingest: async ({ request }) => {
     const formData = await request.formData();
-    const source = formData.get('source');
+    const file = formData.get('campaign-file');
 
-    if (!source || typeof source !== 'string' || source.trim().length === 0) {
+    if (!file || !(file instanceof File) || file.size === 0) {
+      return fail(400, { error: 'A .md file is required.' });
+    }
+
+    if (!file.name.endsWith('.md')) {
+      return fail(400, { error: 'Only .md (Markdown) files are accepted.' });
+    }
+
+    const source = await file.text();
+
+    if (source.trim().length === 0) {
       return fail(400, { error: 'Campaign source content is required.' });
     }
 

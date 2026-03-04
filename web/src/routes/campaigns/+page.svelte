@@ -6,9 +6,16 @@
   let { data, form }: { data: PageData; form: { error?: string } | null } = $props();
 
   let showIngestForm = $state(false);
+  let selectedFileName = $state('');
 
   function toggleIngestForm() {
     showIngestForm = !showIngestForm;
+    selectedFileName = '';
+  }
+
+  function onFileChange(event: Event) {
+    const input = event.target as HTMLInputElement;
+    selectedFileName = input.files?.[0]?.name ?? '';
   }
 </script>
 
@@ -53,24 +60,37 @@
         <p class="mb-4 text-sm" style="color: #e57373;">{form.error}</p>
       {/if}
 
-      <form method="POST" action="?/ingest" use:enhance class="space-y-4">
+      <form method="POST" action="?/ingest" enctype="multipart/form-data" use:enhance class="space-y-4">
         <div>
           <label
-            for="campaign-source"
+            for="campaign-file"
             class="block text-sm font-medium mb-1"
             style="color: var(--color-text-muted);"
           >
-            Campaign Source (Markdown)
+            Campaign File (.md)
           </label>
-          <textarea
-            id="campaign-source"
-            name="source"
+          <input
+            type="file"
+            id="campaign-file"
+            name="campaign-file"
+            accept=".md"
             required
-            rows="10"
-            placeholder="Paste your campaign markdown content here..."
-            class="w-full px-3 py-2 rounded-md text-sm font-mono"
-            style="background-color: var(--color-surface); color: var(--color-text); border: 1px solid var(--color-border); resize: vertical;"
-          ></textarea>
+            class="hidden"
+            onchange={onFileChange}
+          />
+          <div class="flex items-center gap-3">
+            <button
+              type="button"
+              class="px-4 py-2 rounded-md text-sm font-medium transition-colors duration-150"
+              style="background-color: var(--color-accent); color: var(--color-surface);"
+              onclick={() => document.getElementById('campaign-file')?.click()}
+            >
+              Choose File
+            </button>
+            <span class="text-sm" style="color: var(--color-text-muted);">
+              {selectedFileName || 'No file selected'}
+            </span>
+          </div>
         </div>
         <button
           type="submit"
