@@ -158,12 +158,34 @@ Do not write production code without a corresponding failing test. Do not skip t
 
 ## Current State
 
-The project is early-stage. Core abstractions, event store, and the narrative exemplar are implemented end-to-end.
+All seven domain crates are implemented with real aggregates, command handlers, and events. The backend has 383+ tests across the workspace. The web client has route skeletons for all contexts. The iOS client has a full narrative vertical slice.
 
-- **`otherworlds-core`** — Trait abstractions fully defined (`EventRepository`, `Clock`, `DeterministicRng`, `DomainError`, etc.).
+### Infrastructure Crates
+
+- **`otherworlds-core`** — Trait abstractions fully defined: `AggregateRoot`, `DomainEvent`, `EventRepository`, `Clock` (with `SystemClock`/`FixedClock`), `DeterministicRng` (with `MockRng`/`SequenceRng`), `DomainError`, `EventMetadata`.
 - **`otherworlds-event-store`** — `PgEventRepository` fully implemented with `load_events`, `append_events`, proactive optimistic concurrency control, batch INSERT via UNNEST, and tracing instrumentation. 10 integration tests.
-- **`otherworlds-api`** — Server boots with `AppState` holding `PgPool`, `Clock`, `Rng`, and `PgEventRepository`. `ApiError` wrapper maps `DomainError` variants to HTTP status codes (404, 409, 400, 500). Narrative routes are live (`POST /advance-beat`, `POST /present-choice`) with `#[instrument]` tracing (session_id in span fields, correlation_id logged after command creation). Other 6 context routers remain empty `Router::new()`. 10 unit tests (4 error mapping, 5 narrative handler, 1 state).
-- **`otherworlds-narrative`** — Exemplar domain crate. `NarrativeSession` aggregate with `advance_beat()` and `present_choice()` domain methods. `handle_advance_beat` and `handle_present_choice` command handlers with full load-execute-persist flow. 4 unit tests.
-- **Other domain crates** (`rules`, `world-state`, `character`, `inventory`, `session`, `content`) — Directory structure and type stubs exist. Command/query handler files are placeholders awaiting implementation.
+- **`otherworlds-test-support`** — Shared test utilities. 13 tests.
+
+### API Crate
+
+- **`otherworlds-api`** — Composition root with `AppState` holding `PgPool`, `Clock`, `Rng`, `PgEventRepository`. `ApiError` maps `DomainError` to HTTP status codes. Narrative routes fully wired (4 POST + 2 GET handlers) with `#[instrument]` tracing. Other 6 context routers are empty `Router::new()` stubs awaiting handler wiring. 127 tests.
+
+### Domain Crates
+
+- **`otherworlds-narrative`** (exemplar) — `NarrativeSession` aggregate with 5 domain methods (`advance_beat`, `present_choice`, `enter_scene`, `select_choice`, `archive`), 5 event types, 5 command handlers, 2 query handlers. Value objects: `SceneData`, `ChoiceOption`. 59 tests.
+- **`otherworlds-rules`** — `Resolution` aggregate with phase state machine (Created → IntentDeclared → CheckResolved → EffectsProduced). d20 roll with five-tier outcomes (CriticalFailure through CriticalSuccess). 4 domain methods, 4 event types. 40 tests.
+- **`otherworlds-inventory`** — `Inventory` aggregate with HashSet-based item management. 4 domain methods (`add_item`, `remove_item`, `equip_item`, `archive`), 4 event types. Validates duplicates and existence. 29 tests.
+- **`otherworlds-session`** — `CampaignRun` aggregate with checkpoint tracking and timeline branching. 4 domain methods (`start_campaign_run`, `create_checkpoint`, `branch_timeline`, `archive`), 4 event types. 27 tests.
+- **`otherworlds-world-state`** — `WorldSnapshot` aggregate with facts (Vec), flags (HashMap), dispositions. 4 domain methods (`apply_effect`, `set_flag`, `update_disposition`, `archive`), 4 event types. 26 tests.
+- **`otherworlds-character`** — `Character` aggregate with attributes (HashMap) and experience tracking. 4 domain methods (`create`, `modify_attribute`, `award_experience`, `archive`), 4 event types. 24 tests.
+- **`otherworlds-content`** — `Campaign` aggregate with phase states (ingested → validated → compiled → archived). Includes `parser.rs`, `compiler.rs`, `validator.rs` for campaign model processing. SHA-256 version hashing. Command/query handlers minimally implemented.
+
+### Remaining Gaps
+
+- **No cross-context orchestration** — each bounded context operates in isolation; the play loop (narrative → rules → world-state → character) is not implemented.
+- **Timeline branching** records intent only — does not replay source run events onto the forked stream.
+- **Web client** has route structure for all contexts but no API integration.
+- **iOS client** covers only narrative context.
+- **Acceptance tests** have Screenplay pattern infrastructure but only one test suite (campaign pipeline).
 
 Implementation should follow the established patterns in `otherworlds-narrative` (the exemplar).

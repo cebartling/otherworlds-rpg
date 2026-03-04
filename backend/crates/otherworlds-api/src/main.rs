@@ -74,6 +74,7 @@ async fn main() -> Result<(), AppError> {
         .nest("/api/v1/inventory", routes::inventory::router())
         .nest("/api/v1/sessions", routes::session::router())
         .nest("/api/v1/content", routes::content::router())
+        .nest("/api/v1/play", routes::play::router())
         .layer(TraceLayer::new_for_http())
         .layer(cors)
         .with_state(app_state);
