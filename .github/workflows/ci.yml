@@ -88,3 +88,21 @@ jobs:
 
       - name: Run unit tests
         run: npm run test
+
+  ios-tests:
+    name: iOS Swift Tests
+    runs-on: macos-15
+
+    defaults:
+      run:
+        working-directory: ios/OtherworldsApp
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build
+        run: swift build
+
+      - name: Run tests
+        run: swift test
