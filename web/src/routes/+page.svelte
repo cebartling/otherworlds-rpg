@@ -1,5 +1,13 @@
 <script lang="ts">
   import { PUBLIC_APP_NAME } from '$env/static/public';
+  import ImageCarousel from '$lib/components/ImageCarousel.svelte';
+
+  const images = [
+    { src: '/images/female-warrior-lich-battle.png', alt: 'A warrior clashing with a lich in battle' },
+    { src: '/images/female-archer-lich-force-field.png', alt: 'An archer confronting a lich behind a force field' },
+    { src: '/images/female-warrior-entering-lich-tomb.png', alt: 'A warrior entering a dark lich tomb' },
+    { src: '/images/scorcer.png', alt: 'A sorcerer channeling arcane power' },
+  ];
 </script>
 
 <svelte:head>
@@ -21,6 +29,10 @@
       A deterministic, event-driven tabletop RPG engine. Manage your campaigns,
       build characters, and run sessions with full replay and narrative control.
     </p>
+  </section>
+
+  <section>
+    <ImageCarousel {images} />
   </section>
 
   <section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
