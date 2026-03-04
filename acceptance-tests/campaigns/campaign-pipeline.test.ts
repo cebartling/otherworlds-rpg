@@ -1,7 +1,22 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  Actor,
+  BrowseTheWeb,
+  IngestCampaign,
+  ValidateCampaign,
+  CompileCampaign,
+  ArchiveCampaign,
+  Navigate,
+  TheCampaignIdFromUrl,
+  ThePageHeading,
+  ThePipelineStep,
+  TheButtonState,
+  PIPELINE_STEP_GREEN,
+  PIPELINE_STEP_GRAY,
+} from '../screenplay';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -12,77 +27,31 @@ const VALID_CAMPAIGN_SOURCE = readFileSync(
 
 const INVALID_CAMPAIGN_SOURCE = 'This has no YAML front-matter and no scenes.';
 
-/** RegExp matching the green background style (hex from SSR, rgb from client-side). */
-const GREEN_STYLE = /background-color: (#2e7d32|rgb\(46, 125, 50\))/;
-/** RegExp matching the gray border style on inactive pipeline steps/badges. */
-const GRAY_STYLE = /border: 1px solid var\(--color-border\)/;
-
-/**
- * Helper: ingest a campaign via file upload and return the new campaign ID.
- */
-async function ingestCampaign(page: Page, source: string): Promise<string> {
-  await page.goto('/campaigns', { waitUntil: 'networkidle' });
-
-  // Open the ingest form (toggle button reveals the file input)
-  const toggleButton = page.getByRole('button', { name: 'Ingest Campaign' });
-  await toggleButton.click();
-
-  // Wait for the button text to change to "Cancel" (confirms JS hydration + toggle)
-  await expect(page.getByRole('button', { name: 'Cancel' })).toBeVisible({ timeout: 10_000 });
-
-  // Upload file and submit
-  const fileInput = page.locator('#campaign-file');
-  await fileInput.setInputFiles({
-    name: 'campaign.md',
-    mimeType: 'text/markdown',
-    buffer: Buffer.from(source, 'utf-8'),
-  });
-  await page.getByRole('button', { name: 'Ingest', exact: true }).click();
-
-  // Wait for redirect to /campaigns/<uuid>
-  await page.waitForURL(/\/campaigns\/[0-9a-f-]{36}$/);
-
-  const url = page.url();
-  const campaignId = url.split('/campaigns/')[1];
-  return campaignId;
-}
-
-/**
- * Returns the pipeline step circle (the numbered div) for a given step number.
- * Steps are 1=Ingested, 2=Validated, 3=Compiled.
- */
-function pipelineStepCircle(page: Page, stepNumber: number) {
-  return page
-    .locator('section')
-    .filter({ hasText: 'Content Pipeline' })
-    .locator('.rounded-full')
-    .filter({ hasText: String(stepNumber) })
-    .first();
-}
-
 test.describe('Campaign Pipeline', () => {
 
   test('ingest campaign via file upload', async ({ page }) => {
-    const campaignId = await ingestCampaign(page, VALID_CAMPAIGN_SOURCE);
+    const actor = Actor.named('Campaign Author').whoCan(BrowseTheWeb.using(page));
+
+    await actor.attemptsTo(IngestCampaign.withSource(VALID_CAMPAIGN_SOURCE));
+
+    const campaignId = await actor.asks(TheCampaignIdFromUrl.value());
 
     // Should be on the detail page with a valid UUID
     expect(campaignId).toMatch(/^[0-9a-f-]{36}$/);
 
     // The heading should display the campaign ID prefix
-    const heading = page.locator('h1');
-    await expect(heading).toBeVisible();
-    const headingText = await heading.textContent();
+    const headingText = await actor.asks(ThePageHeading.text());
     expect(headingText).toContain(campaignId.substring(0, 8));
 
     // Pipeline step 1 (Ingested) should be green
-    const step1 = pipelineStepCircle(page, 1);
-    await expect(step1).toHaveAttribute('style', GREEN_STYLE);
+    const step1 = await actor.asks(ThePipelineStep.circle(1));
+    await expect(step1).toHaveAttribute('style', PIPELINE_STEP_GREEN);
 
     // Pipeline steps 2 and 3 should be gray (not yet reached)
-    const step2 = pipelineStepCircle(page, 2);
-    await expect(step2).toHaveAttribute('style', GRAY_STYLE);
-    const step3 = pipelineStepCircle(page, 3);
-    await expect(step3).toHaveAttribute('style', GRAY_STYLE);
+    const step2 = await actor.asks(ThePipelineStep.circle(2));
+    await expect(step2).toHaveAttribute('style', PIPELINE_STEP_GRAY);
+    const step3 = await actor.asks(ThePipelineStep.circle(3));
+    await expect(step3).toHaveAttribute('style', PIPELINE_STEP_GRAY);
 
     // Version should show v1 in the Version Details section
     const versionSection = page.locator('section').filter({ hasText: 'Version Details' });
@@ -94,81 +63,80 @@ test.describe('Campaign Pipeline', () => {
     expect(hashText!.length).toBeGreaterThan(10);
 
     // Validate button should be enabled (ingested but not validated)
-    await expect(page.getByRole('button', { name: 'Validate' })).toBeEnabled();
+    expect(await actor.asks(TheButtonState.forButton('Validate'))).toBe(true);
 
     // Compile button should be disabled (not yet validated)
-    await expect(page.getByRole('button', { name: 'Compile' })).toBeDisabled();
+    expect(await actor.asks(TheButtonState.forButton('Compile'))).toBe(false);
   });
 
   test('validate ingested campaign', async ({ page }) => {
-    await ingestCampaign(page, VALID_CAMPAIGN_SOURCE);
+    const actor = Actor.named('Campaign Author').whoCan(BrowseTheWeb.using(page));
 
-    // Click Validate
-    await page.getByRole('button', { name: 'Validate' }).click();
-
-    // Wait for form submission to complete
-    await expect(page.getByText('Campaign validated successfully.')).toBeVisible();
+    await actor.attemptsTo(
+      IngestCampaign.withSource(VALID_CAMPAIGN_SOURCE),
+      ValidateCampaign.now(),
+    );
 
     // Pipeline steps 1 and 2 should now be green
-    const step1 = pipelineStepCircle(page, 1);
-    await expect(step1).toHaveAttribute('style', GREEN_STYLE);
-    const step2 = pipelineStepCircle(page, 2);
-    await expect(step2).toHaveAttribute('style', GREEN_STYLE);
+    const step1 = await actor.asks(ThePipelineStep.circle(1));
+    await expect(step1).toHaveAttribute('style', PIPELINE_STEP_GREEN);
+    const step2 = await actor.asks(ThePipelineStep.circle(2));
+    await expect(step2).toHaveAttribute('style', PIPELINE_STEP_GREEN);
 
     // Pipeline step 3 should still be gray
-    const step3 = pipelineStepCircle(page, 3);
-    await expect(step3).toHaveAttribute('style', GRAY_STYLE);
+    const step3 = await actor.asks(ThePipelineStep.circle(3));
+    await expect(step3).toHaveAttribute('style', PIPELINE_STEP_GRAY);
 
     // Validate button should now be disabled (already validated)
-    await expect(page.getByRole('button', { name: 'Validate' })).toBeDisabled();
+    expect(await actor.asks(TheButtonState.forButton('Validate'))).toBe(false);
 
     // Compile button should now be enabled (validated but not compiled)
-    await expect(page.getByRole('button', { name: 'Compile' })).toBeEnabled();
+    expect(await actor.asks(TheButtonState.forButton('Compile'))).toBe(true);
   });
 
   test('compile validated campaign', async ({ page }) => {
-    await ingestCampaign(page, VALID_CAMPAIGN_SOURCE);
+    const actor = Actor.named('Campaign Author').whoCan(BrowseTheWeb.using(page));
 
-    // Validate first
-    await page.getByRole('button', { name: 'Validate' }).click();
-    await expect(page.getByText('Campaign validated successfully.')).toBeVisible();
-
-    // Now compile
-    await page.getByRole('button', { name: 'Compile' }).click();
-    await expect(page.getByText('Campaign compiled successfully.')).toBeVisible();
+    await actor.attemptsTo(
+      IngestCampaign.withSource(VALID_CAMPAIGN_SOURCE),
+      ValidateCampaign.now(),
+      CompileCampaign.now(),
+    );
 
     // All three pipeline steps should be green
-    const step1 = pipelineStepCircle(page, 1);
-    await expect(step1).toHaveAttribute('style', GREEN_STYLE);
-    const step2 = pipelineStepCircle(page, 2);
-    await expect(step2).toHaveAttribute('style', GREEN_STYLE);
-    const step3 = pipelineStepCircle(page, 3);
-    await expect(step3).toHaveAttribute('style', GREEN_STYLE);
+    const step1 = await actor.asks(ThePipelineStep.circle(1));
+    await expect(step1).toHaveAttribute('style', PIPELINE_STEP_GREEN);
+    const step2 = await actor.asks(ThePipelineStep.circle(2));
+    await expect(step2).toHaveAttribute('style', PIPELINE_STEP_GREEN);
+    const step3 = await actor.asks(ThePipelineStep.circle(3));
+    await expect(step3).toHaveAttribute('style', PIPELINE_STEP_GREEN);
 
     // Both buttons should be disabled
-    await expect(page.getByRole('button', { name: 'Validate' })).toBeDisabled();
-    await expect(page.getByRole('button', { name: 'Compile' })).toBeDisabled();
+    expect(await actor.asks(TheButtonState.forButton('Validate'))).toBe(false);
+    expect(await actor.asks(TheButtonState.forButton('Compile'))).toBe(false);
   });
 
   test('archive campaign removes from list', async ({ page }) => {
-    const campaignId = await ingestCampaign(page, VALID_CAMPAIGN_SOURCE);
+    const actor = Actor.named('Campaign Author').whoCan(BrowseTheWeb.using(page));
 
-    // Click Archive, then Confirm Archive
-    await page.getByRole('button', { name: 'Archive' }).click();
-    await page.getByRole('button', { name: 'Confirm Archive' }).click();
+    await actor.attemptsTo(IngestCampaign.withSource(VALID_CAMPAIGN_SOURCE));
 
-    // Should redirect to /campaigns
-    await page.waitForURL('/campaigns');
+    const campaignId = await actor.asks(TheCampaignIdFromUrl.value());
+
+    await actor.attemptsTo(ArchiveCampaign.now());
 
     // Campaign should no longer appear in the list
     await expect(page.locator(`a[href="/campaigns/${campaignId}"]`)).toHaveCount(0);
   });
 
   test('campaigns list shows ingested campaign with correct badge state', async ({ page }) => {
-    const campaignId = await ingestCampaign(page, VALID_CAMPAIGN_SOURCE);
+    const actor = Actor.named('Campaign Author').whoCan(BrowseTheWeb.using(page));
 
-    // Navigate to campaigns list
-    await page.goto('/campaigns');
+    await actor.attemptsTo(IngestCampaign.withSource(VALID_CAMPAIGN_SOURCE));
+
+    const campaignId = await actor.asks(TheCampaignIdFromUrl.value());
+
+    await actor.attemptsTo(Navigate.to('/campaigns'));
 
     // The specific campaign card should be present (link to its detail page)
     const campaignCard = page.locator(`a[href="/campaigns/${campaignId}"]`);
@@ -176,19 +144,21 @@ test.describe('Campaign Pipeline', () => {
 
     // The Ingested badge on this card should be green-styled
     const ingestedBadge = campaignCard.locator('span').filter({ hasText: 'Ingested' });
-    await expect(ingestedBadge).toHaveAttribute('style', GREEN_STYLE);
+    await expect(ingestedBadge).toHaveAttribute('style', PIPELINE_STEP_GREEN);
 
     // The Validated badge should be gray (not green)
     const validatedBadge = campaignCard.locator('span').filter({ hasText: 'Validated' });
-    await expect(validatedBadge).toHaveAttribute('style', GRAY_STYLE);
+    await expect(validatedBadge).toHaveAttribute('style', PIPELINE_STEP_GRAY);
 
     // The Compiled badge should be gray (not green)
     const compiledBadge = campaignCard.locator('span').filter({ hasText: 'Compiled' });
-    await expect(compiledBadge).toHaveAttribute('style', GRAY_STYLE);
+    await expect(compiledBadge).toHaveAttribute('style', PIPELINE_STEP_GRAY);
   });
 
   test('validation error displays inline', async ({ page }) => {
-    await ingestCampaign(page, INVALID_CAMPAIGN_SOURCE);
+    const actor = Actor.named('Campaign Author').whoCan(BrowseTheWeb.using(page));
+
+    await actor.attemptsTo(IngestCampaign.withSource(INVALID_CAMPAIGN_SOURCE));
 
     // Click Validate — should produce a client error
     await page.getByRole('button', { name: 'Validate' }).click();
@@ -206,12 +176,12 @@ test.describe('Campaign Pipeline', () => {
     await expect(page.getByText('Campaign validated successfully.')).not.toBeVisible();
 
     // Pipeline step 1 should still be green (ingested)
-    const step1 = pipelineStepCircle(page, 1);
-    await expect(step1).toHaveAttribute('style', GREEN_STYLE);
+    const step1 = await actor.asks(ThePipelineStep.circle(1));
+    await expect(step1).toHaveAttribute('style', PIPELINE_STEP_GREEN);
 
     // Pipeline step 2 should still be gray (validation failed)
-    const step2 = pipelineStepCircle(page, 2);
-    await expect(step2).toHaveAttribute('style', GRAY_STYLE);
+    const step2 = await actor.asks(ThePipelineStep.circle(2));
+    await expect(step2).toHaveAttribute('style', PIPELINE_STEP_GRAY);
   });
 
 });

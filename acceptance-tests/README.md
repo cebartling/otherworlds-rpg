@@ -92,6 +92,27 @@ acceptance-tests/
 │   └── campaign-pipeline.test.ts   # Campaign pipeline test suite
 ├── fixtures/
 │   └── the-lost-temple.md          # Valid campaign markdown fixture
+├── screenplay/
+│   ├── core/
+│   │   ├── interfaces.ts           # Performable, Answerable<T>
+│   │   ├── actor.ts                # Actor class
+│   │   └── browse-the-web.ts       # BrowseTheWeb ability (wraps Page)
+│   ├── interactions/
+│   │   ├── navigate.ts             # Navigate.to(path)
+│   │   ├── click.ts                # Click.theButton(name)
+│   │   ├── upload-file.ts          # UploadFile.toInput(selector, opts)
+│   │   └── wait-for-url.ts         # WaitForUrl.matching(pattern)
+│   ├── tasks/
+│   │   ├── ingest-campaign.ts      # IngestCampaign.withSource(md)
+│   │   ├── validate-campaign.ts    # ValidateCampaign.now()
+│   │   ├── compile-campaign.ts     # CompileCampaign.now()
+│   │   └── archive-campaign.ts     # ArchiveCampaign.now()
+│   ├── questions/
+│   │   ├── the-campaign-id-from-url.ts  # TheCampaignIdFromUrl.value()
+│   │   ├── the-page-heading.ts          # ThePageHeading.text()
+│   │   ├── the-pipeline-step.ts         # ThePipelineStep.circle(n)
+│   │   └── the-button-state.ts          # TheButtonState.forButton(name)
+│   └── index.ts                    # Barrel re-export
 ├── global-setup.ts                 # Docker + DB migrations + API startup
 ├── global-teardown.ts              # Docker Compose teardown
 ├── playwright.config.ts
@@ -103,12 +124,7 @@ acceptance-tests/
 
 ### Campaign Pipeline (`campaigns/campaign-pipeline.test.ts`)
 
-Tests the full content pipeline lifecycle: ingest, validate, compile, archive. Every test ingests a fresh campaign so tests are independent and can run in any order.
-
-**Shared helpers:**
-
-- `ingestCampaign(page, source)` — Opens the ingest form, uploads a `.md` file via the file input, submits, waits for redirect to the campaign detail page, and returns the new campaign UUID.
-- `pipelineStepCircle(page, stepNumber)` — Locates the numbered circle element in the Content Pipeline section (1 = Ingested, 2 = Validated, 3 = Compiled).
+Tests the full content pipeline lifecycle: ingest, validate, compile, archive. Every test ingests a fresh campaign so tests are independent and can run in any order. Tests use the Screenplay pattern (see below).
 
 **Fixtures:**
 
@@ -119,7 +135,7 @@ Tests the full content pipeline lifecycle: ingest, validate, compile, archive. E
 
 **Style assertions:**
 
-Pipeline step and badge state is verified via inline `style` attributes. Two regex patterns match green (active) and gray (inactive) states, accounting for both SSR hex values and client-side RGB equivalents.
+Pipeline step and badge state is verified via inline `style` attributes. Two regex constants exported from `screenplay/questions/the-pipeline-step.ts` match green (active) and gray (inactive) states, accounting for both SSR hex values and client-side RGB equivalents.
 
 #### Test Cases
 
@@ -173,14 +189,63 @@ Ingests an invalid campaign (no front-matter), then clicks Validate:
 - Success message is not visible
 - Pipeline step 1 remains green; step 2 remains gray
 
+## Screenplay Pattern
+
+Tests follow the [Screenplay pattern](https://serenity-js.org/handbook/design/screenplay-pattern/) with a lightweight custom implementation (no external library). See [ADR-0013](../documentation/adr/0013-screenplay-pattern-acceptance-tests.md) for the decision rationale.
+
+### Core Concepts
+
+| Concept | Role | Example |
+|---|---|---|
+| **Actor** | Represents a user persona | `Actor.named('Campaign Author')` |
+| **Ability** | Wraps infrastructure (Playwright `Page`) | `BrowseTheWeb.using(page)` |
+| **Interaction** | Single atomic browser action | `Navigate.to('/campaigns')`, `Click.theButton('Validate')` |
+| **Task** | High-level business action (composed of Interactions) | `IngestCampaign.withSource(md)`, `ValidateCampaign.now()` |
+| **Question** | State query returning a typed value | `ThePipelineStep.circle(1)`, `TheButtonState.forButton('Compile')` |
+
+### Usage
+
+```typescript
+import { test, expect } from '@playwright/test';
+import {
+  Actor, BrowseTheWeb,
+  IngestCampaign, ValidateCampaign,
+  ThePipelineStep, TheButtonState,
+  PIPELINE_STEP_GREEN,
+} from '../screenplay';
+
+test('validate ingested campaign', async ({ page }) => {
+  const actor = Actor.named('Campaign Author').whoCan(BrowseTheWeb.using(page));
+
+  await actor.attemptsTo(
+    IngestCampaign.withSource(campaignMarkdown),
+    ValidateCampaign.now(),
+  );
+
+  const step2 = await actor.asks(ThePipelineStep.circle(2));
+  await expect(step2).toHaveAttribute('style', PIPELINE_STEP_GREEN);
+
+  expect(await actor.asks(TheButtonState.forButton('Compile'))).toBe(true);
+});
+```
+
+### Adding New Screenplay Elements
+
+- **Interaction** — Create a class implementing `Performable` in `screenplay/interactions/`. Access the Playwright `Page` via `actor.abilityTo<BrowseTheWeb>(BrowseTheWeb).page`. Each Interaction wraps a single Playwright operation.
+- **Task** — Create a class implementing `Performable` in `screenplay/tasks/`. Delegate to `actor.attemptsTo(...)` with Interactions. Tasks represent business-level actions.
+- **Question** — Create a class implementing `Answerable<T>` in `screenplay/questions/`. Return a typed value from the page.
+- **Barrel** — Re-export new classes from `screenplay/index.ts`.
+- Leave truly one-off Playwright assertions inline in the test until a pattern recurs across multiple tests.
+
 ## Writing New Tests
 
 1. Create a new `.test.ts` file under a descriptive directory (e.g., `sessions/session-management.test.ts`).
-2. Import from `@playwright/test` and reuse the pattern of shared helpers for repeated setup steps.
-3. Each test should be self-contained — create its own data rather than depending on another test's side effects.
-4. Use `waitUntil: 'networkidle'` on `page.goto` for pages that load data from the API.
-5. Prefer role-based selectors (`getByRole`, `getByText`) over CSS selectors where possible.
-6. Run `bun run test` to verify all tests pass before committing.
+2. Import from `../screenplay` and `@playwright/test`. Use `Actor.named(...)` with `BrowseTheWeb.using(page)` to create actors.
+3. Express actions as `await actor.attemptsTo(...)` with Tasks and Interactions.
+4. Express queries as `await actor.asks(...)` with Questions.
+5. Each test should be self-contained — create its own data rather than depending on another test's side effects.
+6. Prefer role-based selectors (`getByRole`, `getByText`) over CSS selectors where possible.
+7. Run `bun run test` to verify all tests pass before committing.
 
 ## Troubleshooting
 
@@ -211,4 +276,4 @@ Make sure web client dependencies are installed (`cd ../web && npm install`). Pl
 
 ### Tests pass locally but fail in CI
 
-CI uses `retries: 2` and does not reuse existing servers. Check that no test relies on data from a previous test — each test should create its own campaign via the `ingestCampaign` helper.
+CI uses `retries: 2` and does not reuse existing servers. Check that no test relies on data from a previous test — each test should create its own campaign via `IngestCampaign.withSource()`.
