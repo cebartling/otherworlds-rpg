@@ -21,6 +21,8 @@ struct SettingsView: View {
                     LabeledContent("Resolved URL", value: configuration.baseURL.absoluteString)
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(Theme.surface)
             .navigationTitle("Settings")
         }
     }

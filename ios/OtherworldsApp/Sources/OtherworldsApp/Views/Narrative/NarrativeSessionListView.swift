@@ -58,8 +58,11 @@ struct NarrativeSessionListView: View {
                 NavigationLink(value: session.sessionId) {
                     NarrativeSessionRowView(session: session)
                 }
+                .listRowBackground(Theme.surface)
             }
         }
+        .scrollContentBackground(.hidden)
+        .background(Theme.surface)
         .navigationDestination(for: UUID.self) { sessionId in
             NarrativeSessionDetailView(sessionId: sessionId, client: endpoint)
         }

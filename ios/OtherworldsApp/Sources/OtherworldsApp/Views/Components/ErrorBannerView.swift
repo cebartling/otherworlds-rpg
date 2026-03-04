@@ -11,15 +11,20 @@ struct ErrorBannerView: View {
                 .foregroundStyle(.yellow)
             Text(message)
                 .font(.subheadline)
+                .foregroundStyle(Theme.text)
             Spacer()
             Button(action: onDismiss) {
                 Image(systemName: "xmark.circle.fill")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.textMuted)
             }
             .buttonStyle(.plain)
         }
         .padding()
-        .background(.red.opacity(0.1))
+        .background(Theme.surfaceAlt)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Theme.border, lineWidth: 1)
+        )
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .padding(.horizontal)
     }

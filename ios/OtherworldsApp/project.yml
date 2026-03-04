@@ -1,0 +1,56 @@
+name: OtherworldsApp
+options:
+  bundleIdPrefix: com.otherworlds
+  deploymentTarget:
+    iOS: "18.0"
+  xcodeVersion: "16.0"
+  generateEmptyDirectories: false
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    CODE_SIGN_IDENTITY: ""
+    CODE_SIGNING_REQUIRED: "NO"
+    CODE_SIGNING_ALLOWED: "NO"
+
+targets:
+  OtherworldsApp:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources/OtherworldsApp
+        excludes:
+          - Resources
+    resources:
+      - path: Sources/OtherworldsApp/Resources/Assets.xcassets
+    settings:
+      base:
+        INFOPLIST_GENERATION_MODE: GeneratedFile
+        PRODUCT_BUNDLE_IDENTIFIER: com.otherworlds.app
+        GENERATE_INFOPLIST_FILE: "YES"
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+
+  OtherworldsAppTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/OtherworldsAppTests
+    dependencies:
+      - target: OtherworldsApp
+    settings:
+      base:
+        INFOPLIST_GENERATION_MODE: GeneratedFile
+        GENERATE_INFOPLIST_FILE: "YES"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/OtherworldsApp.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/OtherworldsApp"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+
+schemes:
+  OtherworldsApp:
+    build:
+      targets:
+        OtherworldsApp: all
+        OtherworldsAppTests: [test]
+    test:
+      targets:
+        - OtherworldsAppTests

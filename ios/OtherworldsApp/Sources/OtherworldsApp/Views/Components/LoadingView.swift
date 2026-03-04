@@ -7,9 +7,10 @@ struct LoadingView: View {
     var body: some View {
         VStack(spacing: 12) {
             ProgressView()
+                .tint(Theme.accent)
             Text(message)
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.textMuted)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

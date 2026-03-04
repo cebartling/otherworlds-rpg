@@ -10,7 +10,7 @@ struct SplashScreenView: View {
                 .ignoresSafeArea()
 
             VStack(spacing: 24) {
-                Image("splash", bundle: .module)
+                Image("splash")
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .frame(maxHeight: 500)
@@ -19,7 +19,7 @@ struct SplashScreenView: View {
                 Text("Otherworlds")
                     .font(.largeTitle)
                     .fontWeight(.bold)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Theme.accent)
             }
             .opacity(isAnimating ? 1.0 : 0.0)
         }

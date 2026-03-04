@@ -30,8 +30,13 @@ npm run check                            # TypeScript/Svelte type checking
 ### Swift iOS Client (from `ios/OtherworldsApp/`)
 
 ```bash
-swift build                              # Debug build
-swift test                               # Run tests
+xcodegen generate                        # Regenerate .xcodeproj from project.yml
+xcodebuild build -project OtherworldsApp.xcodeproj -scheme OtherworldsApp \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=latest' \
+  CODE_SIGNING_ALLOWED=NO               # Debug build
+xcodebuild test -project OtherworldsApp.xcodeproj -scheme OtherworldsApp \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=latest' \
+  CODE_SIGNING_ALLOWED=NO               # Run tests
 ```
 
 ### Docker (from root)

@@ -27,6 +27,7 @@ struct NarrativeSessionDetailView: View {
                 )
             }
         }
+        .background(Theme.surface)
         .navigationTitle("Session")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
@@ -54,10 +55,11 @@ struct NarrativeSessionDetailView: View {
                 if let sceneId = session.currentSceneId {
                     Label(sceneId, systemImage: "book.pages")
                         .font(.title2)
+                        .foregroundStyle(Theme.accent)
                 } else {
                     Text("No active scene")
                         .font(.title2)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.textMuted)
                 }
 
                 // Scene history
@@ -65,13 +67,15 @@ struct NarrativeSessionDetailView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Scene History")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Theme.textMuted)
                         Text(session.sceneHistory.joined(separator: " > "))
                             .font(.subheadline)
+                            .foregroundStyle(Theme.text)
                     }
                 }
 
                 Divider()
+                    .overlay(Theme.border)
 
                 // Choices
                 if session.activeChoiceOptions.isEmpty {
@@ -79,15 +83,17 @@ struct NarrativeSessionDetailView: View {
                         Task { await viewModel.advanceBeat() }
                     }
                     .buttonStyle(.borderedProminent)
+                    .tint(Theme.accent)
                 } else {
                     Text("Choose your path:")
                         .font(.headline)
+                        .foregroundStyle(Theme.accent)
 
                     ForEach(
                         Array(session.activeChoiceOptions.enumerated()),
                         id: \.offset
                     ) { index, choice in
-                        ChoiceButtonView(label: choice.label) {
+                        ChoiceButtonView(index: index + 1, label: choice.label) {
                             Task {
                                 let target = TargetSceneRequest(
                                     sceneId: choice.targetSceneId,
@@ -106,10 +112,11 @@ struct NarrativeSessionDetailView: View {
                     Spacer()
                     Text("Version \(session.version)")
                         .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(Theme.textMuted)
                 }
             }
             .padding()
         }
+        .background(Theme.surface)
     }
 }

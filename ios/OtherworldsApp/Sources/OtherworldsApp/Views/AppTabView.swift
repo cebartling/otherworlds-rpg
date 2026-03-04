@@ -14,5 +14,6 @@ struct AppTabView: View {
                 SettingsView(configuration: configuration)
             }
         }
+        .tint(Theme.accent)
     }
 }

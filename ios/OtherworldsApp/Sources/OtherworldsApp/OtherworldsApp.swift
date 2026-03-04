@@ -7,15 +7,18 @@ struct OtherworldsApp: App {
 
     var body: some Scene {
         WindowGroup {
-            if showSplash {
-                SplashScreenView {
-                    withAnimation(.easeInOut(duration: 0.5)) {
-                        showSplash = false
+            Group {
+                if showSplash {
+                    SplashScreenView {
+                        withAnimation(.easeInOut(duration: 0.5)) {
+                            showSplash = false
+                        }
                     }
+                } else {
+                    AppTabView(configuration: configuration)
                 }
-            } else {
-                AppTabView(configuration: configuration)
             }
+            .preferredColorScheme(.dark)
         }
     }
 }
