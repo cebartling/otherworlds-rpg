@@ -208,7 +208,9 @@ mod tests {
     use otherworlds_core::error::DomainError;
     use otherworlds_core::repository::{EventRepository, StoredEvent};
     use otherworlds_core::rng::DeterministicRng;
-    use otherworlds_session::domain::events::{CampaignRunStarted, SessionEventKind};
+    use otherworlds_session::domain::events::{
+        CampaignRunStarted, CheckpointCreated, SessionEventKind,
+    };
     use otherworlds_test_support::{
         EmptyEventRepository, FailingEventRepository, FixedClock, MockRng, RecordingEventRepository,
     };
@@ -217,29 +219,52 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use tower::ServiceExt;
 
+    /// Well-known checkpoint ID used by the mock repository so branch tests
+    /// can reference a valid checkpoint.
+    const MOCK_CHECKPOINT_ID: Uuid = Uuid::from_u128(0xBEEF_0001);
+
     #[derive(Debug)]
     struct MockEventRepository;
 
     #[async_trait::async_trait]
     impl EventRepository for MockEventRepository {
         async fn load_events(&self, aggregate_id: Uuid) -> Result<Vec<StoredEvent>, DomainError> {
-            // Return a dummy event so existence checks pass.
-            Ok(vec![StoredEvent {
-                event_id: Uuid::new_v4(),
-                aggregate_id,
-                event_type: "session.campaign_run_started".to_owned(),
-                payload: serde_json::to_value(SessionEventKind::CampaignRunStarted(
-                    CampaignRunStarted {
-                        run_id: aggregate_id,
-                        campaign_id: Uuid::new_v4(),
-                    },
-                ))
-                .unwrap(),
-                sequence_number: 1,
-                correlation_id: Uuid::new_v4(),
-                causation_id: Uuid::new_v4(),
-                occurred_at: Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
-            }])
+            let fixed_now = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+            // Return events so existence and checkpoint validation pass.
+            Ok(vec![
+                StoredEvent {
+                    event_id: Uuid::new_v4(),
+                    aggregate_id,
+                    event_type: "session.campaign_run_started".to_owned(),
+                    payload: serde_json::to_value(SessionEventKind::CampaignRunStarted(
+                        CampaignRunStarted {
+                            run_id: aggregate_id,
+                            campaign_id: Uuid::new_v4(),
+                        },
+                    ))
+                    .unwrap(),
+                    sequence_number: 1,
+                    correlation_id: Uuid::new_v4(),
+                    causation_id: Uuid::new_v4(),
+                    occurred_at: fixed_now,
+                },
+                StoredEvent {
+                    event_id: Uuid::new_v4(),
+                    aggregate_id,
+                    event_type: "session.checkpoint_created".to_owned(),
+                    payload: serde_json::to_value(SessionEventKind::CheckpointCreated(
+                        CheckpointCreated {
+                            run_id: aggregate_id,
+                            checkpoint_id: MOCK_CHECKPOINT_ID,
+                        },
+                    ))
+                    .unwrap(),
+                    sequence_number: 2,
+                    correlation_id: Uuid::new_v4(),
+                    causation_id: Uuid::new_v4(),
+                    occurred_at: fixed_now,
+                },
+            ])
         }
 
         async fn append_events(
@@ -356,10 +381,9 @@ mod tests {
         // Arrange
         let app = router().with_state(test_app_state());
         let source_run_id = Uuid::new_v4();
-        let from_checkpoint_id = Uuid::new_v4();
         let body = serde_json::json!({
             "source_run_id": source_run_id,
-            "from_checkpoint_id": from_checkpoint_id
+            "from_checkpoint_id": MOCK_CHECKPOINT_ID
         });
 
         let request = Request::builder()
@@ -383,8 +407,9 @@ mod tests {
         // Verify aggregate_id is a valid UUID (the newly created branch_run_id).
         Uuid::parse_str(json["aggregate_id"].as_str().unwrap()).unwrap();
 
+        // Replayed CampaignRunStarted + CheckpointCreated + TimelineBranched = 3 events
         let event_ids = json["event_ids"].as_array().unwrap();
-        assert_eq!(event_ids.len(), 1);
+        assert_eq!(event_ids.len(), 3);
         for id in event_ids {
             Uuid::parse_str(id.as_str().unwrap()).unwrap();
         }

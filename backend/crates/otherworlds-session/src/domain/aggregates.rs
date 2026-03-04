@@ -106,6 +106,55 @@ impl CampaignRun {
         self.uncommitted_events.push(event);
     }
 
+    /// Replays source run events onto this branch, rewriting `run_id` fields
+    /// to point to the branch. Used during timeline branching to fork the
+    /// event stream up to a checkpoint.
+    ///
+    /// Only replays `CampaignRunStarted` and `CheckpointCreated` events.
+    /// `TimelineBranched` and `CampaignRunArchived` events are skipped.
+    pub fn replay_source_events(
+        &mut self,
+        source_events: &[SessionEvent],
+        correlation_id: Uuid,
+        clock: &dyn Clock,
+        rng: &mut dyn DeterministicRng,
+    ) {
+        for source_event in source_events {
+            let kind = match &source_event.kind {
+                SessionEventKind::CampaignRunStarted(payload) => {
+                    SessionEventKind::CampaignRunStarted(CampaignRunStarted {
+                        run_id: self.id,
+                        campaign_id: payload.campaign_id,
+                    })
+                }
+                SessionEventKind::CheckpointCreated(payload) => {
+                    SessionEventKind::CheckpointCreated(CheckpointCreated {
+                        run_id: self.id,
+                        checkpoint_id: payload.checkpoint_id,
+                    })
+                }
+                SessionEventKind::TimelineBranched(_) | SessionEventKind::CampaignRunArchived(_) => {
+                    continue;
+                }
+            };
+
+            let event = SessionEvent {
+                metadata: EventMetadata {
+                    event_id: rng.next_uuid(),
+                    event_type: source_event.metadata.event_type.clone(),
+                    aggregate_id: self.id,
+                    sequence_number: self.next_sequence_number(),
+                    correlation_id,
+                    causation_id: correlation_id,
+                    occurred_at: clock.now(),
+                },
+                kind,
+            };
+
+            self.uncommitted_events.push(event);
+        }
+    }
+
     /// Branches a timeline, producing a `TimelineBranched` event.
     pub fn branch_timeline(
         &mut self,
