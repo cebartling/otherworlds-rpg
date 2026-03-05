@@ -76,6 +76,7 @@
 		96D2FF044DF1E540C1C41DA9 /* CharacterListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A45107F022ECC6F51697931F /* CharacterListView.swift */; };
 		9F725E84EFCB86ED4DB9B5C5 /* NarrativeEndpoint.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA6408F3F393228881BF1E7D /* NarrativeEndpoint.swift */; };
 		A327B1178D2A4B81B2FBFCD6 /* NarrativeSessionRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F708F7BB62CC54E103B6B4F2 /* NarrativeSessionRowView.swift */; };
+		A94D856178E30B50F249EC4A /* AppLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 864F0ADF3E716E4F53CCFB93 /* AppLogger.swift */; };
 		B34DD532B4731C4F69805EF2 /* CampaignRequests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBEEC635292B6174A31BFA8E /* CampaignRequests.swift */; };
 		B7DB87D0568FB1DFBB6830BD /* NarrativeSessionDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59D195C3862A1BA16E17E6EC /* NarrativeSessionDetailView.swift */; };
 		B9D9428FFC116590939C6C99 /* CharacterSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1648F60A210E91775F349353 /* CharacterSummary.swift */; };
@@ -102,6 +103,7 @@
 		E8B2147D07A36D3D5CA21E28 /* NarrativeEndpointTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FA4EAB258B69E0DB95A1B37 /* NarrativeEndpointTests.swift */; };
 		E8D3324E972F51A9C40170DE /* HealthResponse.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4ACBECF531289368764852E4 /* HealthResponse.swift */; };
 		E93B70B0B5BB440A9C4BB22F /* CampaignRunListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 938F44CD25C67B86C56B3DE4 /* CampaignRunListView.swift */; };
+		E95BA45691BA17FFC7B3EB41 /* CorrelationId.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD34256CE98E2F2C36035AF7 /* CorrelationId.swift */; };
 		E9B0001A9048F86A8D395E01 /* InventoryDetailViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEE6287B1EE387268D93210F /* InventoryDetailViewModel.swift */; };
 		EB7929213FFF34B44984F3AE /* WorldStateEndpointTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B06E07C5D736A3681AE591C2 /* WorldStateEndpointTests.swift */; };
 		ED7C2C9DDA817710238B2980 /* ChoiceButtonView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9743F508008D0CD40E0C9AD9 /* ChoiceButtonView.swift */; };
@@ -178,6 +180,7 @@
 		766EB3237AD74C08CEF065E8 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		82860753C9DE693CD1563617 /* LoadingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoadingView.swift; sourceTree = "<group>"; };
 		84F037977442DBD7AFC331A1 /* InventoryRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InventoryRowView.swift; sourceTree = "<group>"; };
+		864F0ADF3E716E4F53CCFB93 /* AppLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLogger.swift; sourceTree = "<group>"; };
 		89014FC4CC9570A961D15966 /* CampaignRunDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CampaignRunDetailView.swift; sourceTree = "<group>"; };
 		89E2286F12B8B2825D01B2A4 /* CharacterEndpoint.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CharacterEndpoint.swift; sourceTree = "<group>"; };
 		8B4C2AF620F5FBE0496811AD /* ResolutionDetail.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResolutionDetail.swift; sourceTree = "<group>"; };
@@ -242,6 +245,7 @@
 		F8C1FCE7564DBEF3FE9F01BC /* CampaignModelsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CampaignModelsTests.swift; sourceTree = "<group>"; };
 		F91842957266DFE00E0D5926 /* WorldStateEndpoint.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldStateEndpoint.swift; sourceTree = "<group>"; };
 		FA549332B92DAD798F98D47F /* CampaignListViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CampaignListViewModelTests.swift; sourceTree = "<group>"; };
+		FD34256CE98E2F2C36035AF7 /* CorrelationId.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CorrelationId.swift; sourceTree = "<group>"; };
 		FEA545B7A75B50AC3CB938AC /* ResolutionListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResolutionListView.swift; sourceTree = "<group>"; };
 		FEE6287B1EE387268D93210F /* InventoryDetailViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InventoryDetailViewModel.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -296,6 +300,15 @@
 				635F4F611D142B53C9D2EFA2 /* CampaignRunRowView.swift */,
 			);
 			path = Session;
+			sourceTree = "<group>";
+		};
+		2767B25C08F12FFBFBE4B37F /* Observability */ = {
+			isa = PBXGroup;
+			children = (
+				864F0ADF3E716E4F53CCFB93 /* AppLogger.swift */,
+				FD34256CE98E2F2C36035AF7 /* CorrelationId.swift */,
+			);
+			path = Observability;
 			sourceTree = "<group>";
 		};
 		3FCC6BB4E59EA0854A87276E = {
@@ -516,6 +529,7 @@
 				DF511C7E843E6A0C14619C86 /* API */,
 				F6EA2B5586B4928A360CF1B3 /* Configuration */,
 				97D66474C212BDF20C7BB584 /* Models */,
+				2767B25C08F12FFBFBE4B37F /* Observability */,
 				BF04AF3BDBD2F21C324FFAFD /* ViewModels */,
 				799A0A1DD5FC5A7D61738CE3 /* Views */,
 			);
@@ -654,9 +668,10 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+				};
 			};
 			buildConfigurationList = AE19AAB28C6CC11FFC23732A /* Build configuration list for PBXProject "OtherworldsApp" */;
-			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -666,6 +681,7 @@
 			mainGroup = 3FCC6BB4E59EA0854A87276E;
 			minimizedProjectReferenceProxies = 1;
 			preferredProjectObjectVersion = 77;
+			productRefGroup = F4D8EBC70EEE536F4D0DC726 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -682,6 +698,7 @@
 			files = (
 				E2DED541E78F73D6C2FB68AB /* APIError.swift in Sources */,
 				55B4F2EC940FD190AA1661BD /* AppConfiguration.swift in Sources */,
+				A94D856178E30B50F249EC4A /* AppLogger.swift in Sources */,
 				C800E81B3A65BF542AACF39C /* AppTabView.swift in Sources */,
 				32DF5013CB86CD6D3EA2B313 /* CampaignDetail.swift in Sources */,
 				8F14B8BBB16477DFC428759E /* CampaignDetailView.swift in Sources */,
@@ -712,6 +729,7 @@
 				DCC808D2088B0FDE1DC861F8 /* ChoiceOption.swift in Sources */,
 				56E6E4575BBF06F5AB8EDD8C /* CommandResponse.swift in Sources */,
 				44072FED7893F145F7AA5C44 /* ContentEndpoint.swift in Sources */,
+				E95BA45691BA17FFC7B3EB41 /* CorrelationId.swift in Sources */,
 				2B0A4942D303A30546381F9C /* ErrorBannerView.swift in Sources */,
 				96B36B17344BED1BF00182DE /* ErrorResponse.swift in Sources */,
 				25CD45FAD36B8EB7F6A5651F /* HTTPClient.swift in Sources */,
