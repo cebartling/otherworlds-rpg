@@ -182,7 +182,7 @@ All seven domain crates are implemented with real aggregates, command handlers, 
 
 ### Remaining Gaps
 
-- **Cross-context orchestration** — a `/api/v1/play/resolve-action` route exists but the full play loop (narrative → rules → world-state → character) needs further development.
+- **Cross-context orchestration** — `POST /api/v1/play/resolve-action` fully orchestrates the play loop (rules intent → rules check → rules effects → world state → narrative) with correlation ID threading. Documented in ADR-0014. Branch orchestration in `orchestration::branch` handles cross-context event cloning.
 - **Timeline branching** — session-level replay is implemented. Cross-context replay is implemented via `orchestration::branch` in the API crate using `RegisterAggregate` events and `clone_events_for_branch` from core. Callers must register aggregates with a campaign run (via `RegisterAggregate` command) for them to be cloned during branching.
 - **Web client** has full API integration for all 7 domain contexts (campaigns, characters, inventory, world-state, rules, sessions, narrative/play) with list and detail views, form actions, and server-side API clients.
 - **iOS client** has full implementations for all 7 domain contexts but no cross-context play loop integration.
