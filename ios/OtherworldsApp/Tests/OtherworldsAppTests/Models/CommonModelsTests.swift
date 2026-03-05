@@ -53,6 +53,36 @@ struct CommonModelsTests {
         let decoded = try decoder.decode(CommandResponse.self, from: json)
 
         #expect(decoded.eventIds.isEmpty)
+        #expect(decoded.aggregateId == nil)
+    }
+
+    @Test func commandResponse_decodesWithAggregateId() throws {
+        let aggregateId = UUID()
+        let eventId = UUID()
+        let json = """
+            {"event_ids":["\(eventId.uuidString)"],"aggregate_id":"\(aggregateId.uuidString)"}
+            """.data(using: .utf8)!
+
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let decoded = try decoder.decode(CommandResponse.self, from: json)
+
+        #expect(decoded.eventIds == [eventId])
+        #expect(decoded.aggregateId == aggregateId)
+    }
+
+    @Test func commandResponse_decodesWithoutAggregateId() throws {
+        let eventId = UUID()
+        let json = """
+            {"event_ids":["\(eventId.uuidString)"]}
+            """.data(using: .utf8)!
+
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let decoded = try decoder.decode(CommandResponse.self, from: json)
+
+        #expect(decoded.eventIds == [eventId])
+        #expect(decoded.aggregateId == nil)
     }
 
     // MARK: - HealthResponse

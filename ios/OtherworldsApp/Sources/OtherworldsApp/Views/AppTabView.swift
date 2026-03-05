@@ -10,6 +10,10 @@ struct AppTabView: View {
                 NarrativeSessionListView(client: configuration.makeHTTPClient())
             }
 
+            Tab("Characters", systemImage: "person.3") {
+                CharacterListView(client: configuration.makeHTTPClient())
+            }
+
             Tab("Settings", systemImage: "gear") {
                 SettingsView(configuration: configuration)
             }
