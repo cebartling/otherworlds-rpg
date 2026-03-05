@@ -19,3 +19,7 @@
 {"actor":"Christopher Bartling","comment":null,"created_at":"2026-03-04T22:23:39Z","event_type":"closed","id":19,"issue_id":"otherworlds-rpg-uvc","new_value":"Closed","old_value":""}
 {"actor":"Christopher Bartling","comment":null,"created_at":"2026-03-04T23:17:31Z","event_type":"created","id":20,"issue_id":"otherworlds-rpg-ho0","new_value":"","old_value":""}
 {"actor":"Christopher Bartling","comment":null,"created_at":"2026-03-04T23:17:31Z","event_type":"created","id":21,"issue_id":"otherworlds-rpg-ddb","new_value":"","old_value":""}
+{"actor":"Christopher Bartling","comment":null,"created_at":"2026-03-04T23:17:31Z","event_type":"created","id":22,"issue_id":"otherworlds-rpg-ikc","new_value":"","old_value":""}
+{"actor":"Christopher Bartling","comment":null,"created_at":"2026-03-04T23:17:31Z","event_type":"created","id":23,"issue_id":"otherworlds-rpg-86g","new_value":"","old_value":""}
+{"actor":"Christopher Bartling","comment":null,"created_at":"2026-03-04T23:17:31Z","event_type":"created","id":24,"issue_id":"otherworlds-rpg-uw4","new_value":"","old_value":""}
+{"actor":"Christopher Bartling","comment":null,"created_at":"2026-03-04T23:23:01Z","event_type":"closed","id":25,"issue_id":"otherworlds-rpg-g8u","new_value":"Decomposed into 5 context-specific issues: ddb (Inventory), ho0 (Session), uw4 (World State), ikc (Content), 86g (Rules)","old_value":""}
