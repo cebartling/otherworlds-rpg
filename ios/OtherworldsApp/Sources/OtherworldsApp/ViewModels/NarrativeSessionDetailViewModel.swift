@@ -17,13 +17,16 @@ final class NarrativeSessionDetailViewModel {
     }
 
     func loadSession() async {
+        AppLogger.ui.info("Loading narrative session \(self.sessionId)...")
         isLoading = true
         error = nil
         do {
             session = try await endpoint.getSession(id: sessionId)
         } catch let apiError as APIError {
+            AppLogger.ui.error("Failed to load narrative session \(self.sessionId): \(apiError.localizedDescription)")
             error = apiError
         } catch {
+            AppLogger.ui.error("Failed to load narrative session \(self.sessionId): \(error.localizedDescription)")
             self.error = .network(error.localizedDescription)
         }
         isLoading = false

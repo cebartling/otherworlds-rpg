@@ -3,11 +3,13 @@
  *
  * This module lives under $lib/server/ so SvelteKit prevents
  * client-side imports. All fetch calls go through apiFetch<T>,
- * which handles JSON serialization, error parsing, and dev logging.
+ * which handles JSON serialization, error parsing, and span-based
+ * distributed tracing via OpenTelemetry.
  */
 
 import { API_BASE_URL } from '$env/static/private';
 import type { ErrorResponse } from '$lib/types';
+import { getTracer, generateCorrelationId, SpanStatusCode } from '$lib/server/telemetry';
 
 /**
  * Typed error thrown when the API returns a non-OK status code.
@@ -38,56 +40,74 @@ interface ApiFetchOptions {
  * Core fetch wrapper that prepends API_BASE_URL, sets JSON headers,
  * forwards an optional correlation ID, and parses the response.
  *
+ * Each outgoing call is wrapped in an OpenTelemetry span with
+ * standard HTTP semantic attributes.
+ *
  * On non-OK responses the body is parsed as ErrorResponse and thrown
  * as an ApiClientError.
  */
 async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): Promise<T> {
-  const { method = 'GET', body, correlationId } = options;
+  const { method = 'GET', body } = options;
+  const correlationId = options.correlationId ?? generateCorrelationId();
 
   const url = `${API_BASE_URL}${path}`;
+  const tracer = getTracer();
 
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    'Accept': 'application/json',
-  };
+  return tracer.startActiveSpan(`api-client ${method} ${path}`, async (span) => {
+    span.setAttribute('http.method', method);
+    span.setAttribute('http.url', url);
+    span.setAttribute('correlation.id', correlationId);
 
-  if (correlationId) {
-    headers['X-Correlation-ID'] = correlationId;
-  }
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'X-Correlation-ID': correlationId,
+    };
 
-  const init: RequestInit = {
-    method,
-    headers,
-  };
+    const init: RequestInit = {
+      method,
+      headers,
+    };
 
-  if (body !== undefined) {
-    init.body = JSON.stringify(body);
-  }
-
-  if (import.meta.env.DEV) {
-    console.log(`[api-client] ${method} ${url}`);
-  }
-
-  const response = await fetch(url, init);
-
-  if (import.meta.env.DEV) {
-    console.log(`[api-client] ${method} ${url} -> ${response.status}`);
-  }
-
-  if (!response.ok) {
-    let errorResponse: ErrorResponse;
-    try {
-      errorResponse = (await response.json()) as ErrorResponse;
-    } catch {
-      errorResponse = {
-        error: 'unknown_error',
-        message: `HTTP ${response.status}: ${response.statusText}`,
-      };
+    if (body !== undefined) {
+      init.body = JSON.stringify(body);
     }
-    throw new ApiClientError(response.status, errorResponse);
-  }
 
-  return (await response.json()) as T;
+    try {
+      const response = await fetch(url, init);
+
+      span.setAttribute('http.status_code', response.status);
+
+      if (!response.ok) {
+        let errorResponse: ErrorResponse;
+        try {
+          errorResponse = (await response.json()) as ErrorResponse;
+        } catch {
+          errorResponse = {
+            error: 'unknown_error',
+            message: `HTTP ${response.status}: ${response.statusText}`,
+          };
+        }
+        const err = new ApiClientError(response.status, errorResponse);
+        span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
+        span.recordException(err);
+        span.end();
+        throw err;
+      }
+
+      span.end();
+      return (await response.json()) as T;
+    } catch (error) {
+      if (!(error instanceof ApiClientError)) {
+        span.setStatus({ code: SpanStatusCode.ERROR });
+        if (error instanceof Error) {
+          span.recordException(error);
+        }
+        span.end();
+      }
+      throw error;
+    }
+  });
 }
 
 /**

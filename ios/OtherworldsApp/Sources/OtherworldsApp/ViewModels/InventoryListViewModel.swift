@@ -15,13 +15,17 @@ final class InventoryListViewModel {
     }
 
     func loadInventories() async {
+        AppLogger.ui.info("Loading inventories...")
         isLoading = true
         error = nil
         do {
             inventories = try await endpoint.listInventories()
+            AppLogger.ui.info("Loaded \(self.inventories.count) inventories")
         } catch let apiError as APIError {
+            AppLogger.ui.error("Failed to load inventories: \(apiError.localizedDescription)")
             error = apiError
         } catch {
+            AppLogger.ui.error("Failed to load inventories: \(error.localizedDescription)")
             self.error = .network(error.localizedDescription)
         }
         isLoading = false
@@ -33,8 +37,10 @@ final class InventoryListViewModel {
             _ = try await endpoint.archiveInventory(id: id)
             await loadInventories()
         } catch let apiError as APIError {
+            AppLogger.ui.error("Failed to archive inventory \(id): \(apiError.localizedDescription)")
             error = apiError
         } catch {
+            AppLogger.ui.error("Failed to archive inventory \(id): \(error.localizedDescription)")
             self.error = .network(error.localizedDescription)
         }
     }

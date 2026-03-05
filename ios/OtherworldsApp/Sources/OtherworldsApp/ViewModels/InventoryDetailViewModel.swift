@@ -17,13 +17,16 @@ final class InventoryDetailViewModel {
     }
 
     func loadInventory() async {
+        AppLogger.ui.info("Loading inventory \(self.inventoryId)...")
         isLoading = true
         error = nil
         do {
             inventory = try await endpoint.getInventory(id: inventoryId)
         } catch let apiError as APIError {
+            AppLogger.ui.error("Failed to load inventory \(self.inventoryId): \(apiError.localizedDescription)")
             error = apiError
         } catch {
+            AppLogger.ui.error("Failed to load inventory \(self.inventoryId): \(error.localizedDescription)")
             self.error = .network(error.localizedDescription)
         }
         isLoading = false

@@ -17,13 +17,16 @@ final class ResolutionDetailViewModel {
     }
 
     func loadResolution() async {
+        AppLogger.ui.info("Loading resolution \(self.resolutionId)...")
         isLoading = true
         error = nil
         do {
             resolution = try await endpoint.getResolution(id: resolutionId)
         } catch let apiError as APIError {
+            AppLogger.ui.error("Failed to load resolution \(self.resolutionId): \(apiError.localizedDescription)")
             error = apiError
         } catch {
+            AppLogger.ui.error("Failed to load resolution \(self.resolutionId): \(error.localizedDescription)")
             self.error = .network(error.localizedDescription)
         }
         isLoading = false

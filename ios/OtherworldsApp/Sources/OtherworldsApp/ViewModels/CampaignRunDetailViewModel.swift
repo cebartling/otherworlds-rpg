@@ -17,13 +17,16 @@ final class CampaignRunDetailViewModel {
     }
 
     func loadCampaignRun() async {
+        AppLogger.ui.info("Loading campaign run \(self.runId)...")
         isLoading = true
         error = nil
         do {
             campaignRun = try await endpoint.getCampaignRun(id: runId)
         } catch let apiError as APIError {
+            AppLogger.ui.error("Failed to load campaign run \(self.runId): \(apiError.localizedDescription)")
             error = apiError
         } catch {
+            AppLogger.ui.error("Failed to load campaign run \(self.runId): \(error.localizedDescription)")
             self.error = .network(error.localizedDescription)
         }
         isLoading = false

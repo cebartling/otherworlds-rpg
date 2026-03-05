@@ -17,13 +17,16 @@ final class CampaignDetailViewModel {
     }
 
     func loadCampaign() async {
+        AppLogger.ui.info("Loading campaign \(self.campaignId)...")
         isLoading = true
         error = nil
         do {
             campaign = try await endpoint.getCampaign(id: campaignId)
         } catch let apiError as APIError {
+            AppLogger.ui.error("Failed to load campaign \(self.campaignId): \(apiError.localizedDescription)")
             error = apiError
         } catch {
+            AppLogger.ui.error("Failed to load campaign \(self.campaignId): \(error.localizedDescription)")
             self.error = .network(error.localizedDescription)
         }
         isLoading = false

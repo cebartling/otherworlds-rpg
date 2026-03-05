@@ -17,13 +17,16 @@ final class CharacterDetailViewModel {
     }
 
     func loadCharacter() async {
+        AppLogger.ui.info("Loading character \(self.characterId)...")
         isLoading = true
         error = nil
         do {
             character = try await endpoint.getCharacter(id: characterId)
         } catch let apiError as APIError {
+            AppLogger.ui.error("Failed to load character \(self.characterId): \(apiError.localizedDescription)")
             error = apiError
         } catch {
+            AppLogger.ui.error("Failed to load character \(self.characterId): \(error.localizedDescription)")
             self.error = .network(error.localizedDescription)
         }
         isLoading = false

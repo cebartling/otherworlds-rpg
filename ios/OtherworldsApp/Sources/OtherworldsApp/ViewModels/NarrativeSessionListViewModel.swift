@@ -15,13 +15,17 @@ final class NarrativeSessionListViewModel {
     }
 
     func loadSessions() async {
+        AppLogger.ui.info("Loading narrative sessions...")
         isLoading = true
         error = nil
         do {
             sessions = try await endpoint.listSessions()
+            AppLogger.ui.info("Loaded \(self.sessions.count) narrative sessions")
         } catch let apiError as APIError {
+            AppLogger.ui.error("Failed to load narrative sessions: \(apiError.localizedDescription)")
             error = apiError
         } catch {
+            AppLogger.ui.error("Failed to load narrative sessions: \(error.localizedDescription)")
             self.error = .network(error.localizedDescription)
         }
         isLoading = false
@@ -33,8 +37,10 @@ final class NarrativeSessionListViewModel {
             _ = try await endpoint.archiveSession(id: id)
             await loadSessions()
         } catch let apiError as APIError {
+            AppLogger.ui.error("Failed to archive narrative session \(id): \(apiError.localizedDescription)")
             error = apiError
         } catch {
+            AppLogger.ui.error("Failed to archive narrative session \(id): \(error.localizedDescription)")
             self.error = .network(error.localizedDescription)
         }
     }

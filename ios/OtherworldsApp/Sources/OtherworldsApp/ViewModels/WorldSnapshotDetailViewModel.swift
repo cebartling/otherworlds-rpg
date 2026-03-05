@@ -17,13 +17,16 @@ final class WorldSnapshotDetailViewModel {
     }
 
     func loadWorldSnapshot() async {
+        AppLogger.ui.info("Loading world snapshot \(self.worldId)...")
         isLoading = true
         error = nil
         do {
             worldSnapshot = try await endpoint.getWorldSnapshot(id: worldId)
         } catch let apiError as APIError {
+            AppLogger.ui.error("Failed to load world snapshot \(self.worldId): \(apiError.localizedDescription)")
             error = apiError
         } catch {
+            AppLogger.ui.error("Failed to load world snapshot \(self.worldId): \(error.localizedDescription)")
             self.error = .network(error.localizedDescription)
         }
         isLoading = false

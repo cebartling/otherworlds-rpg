@@ -15,13 +15,17 @@ final class CampaignListViewModel {
     }
 
     func loadCampaigns() async {
+        AppLogger.ui.info("Loading campaigns...")
         isLoading = true
         error = nil
         do {
             campaigns = try await endpoint.listCampaigns()
+            AppLogger.ui.info("Loaded \(self.campaigns.count) campaigns")
         } catch let apiError as APIError {
+            AppLogger.ui.error("Failed to load campaigns: \(apiError.localizedDescription)")
             error = apiError
         } catch {
+            AppLogger.ui.error("Failed to load campaigns: \(error.localizedDescription)")
             self.error = .network(error.localizedDescription)
         }
         isLoading = false
@@ -33,8 +37,10 @@ final class CampaignListViewModel {
             _ = try await endpoint.archiveCampaign(id: id)
             await loadCampaigns()
         } catch let apiError as APIError {
+            AppLogger.ui.error("Failed to archive campaign \(id): \(apiError.localizedDescription)")
             error = apiError
         } catch {
+            AppLogger.ui.error("Failed to archive campaign \(id): \(error.localizedDescription)")
             self.error = .network(error.localizedDescription)
         }
     }

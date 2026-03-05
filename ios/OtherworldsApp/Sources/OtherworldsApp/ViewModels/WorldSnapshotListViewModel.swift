@@ -15,13 +15,17 @@ final class WorldSnapshotListViewModel {
     }
 
     func loadWorldSnapshots() async {
+        AppLogger.ui.info("Loading world snapshots...")
         isLoading = true
         error = nil
         do {
             worldSnapshots = try await endpoint.listWorldSnapshots()
+            AppLogger.ui.info("Loaded \(self.worldSnapshots.count) world snapshots")
         } catch let apiError as APIError {
+            AppLogger.ui.error("Failed to load world snapshots: \(apiError.localizedDescription)")
             error = apiError
         } catch {
+            AppLogger.ui.error("Failed to load world snapshots: \(error.localizedDescription)")
             self.error = .network(error.localizedDescription)
         }
         isLoading = false
@@ -33,8 +37,10 @@ final class WorldSnapshotListViewModel {
             _ = try await endpoint.archiveWorldSnapshot(id: id)
             await loadWorldSnapshots()
         } catch let apiError as APIError {
+            AppLogger.ui.error("Failed to archive world snapshot \(id): \(apiError.localizedDescription)")
             error = apiError
         } catch {
+            AppLogger.ui.error("Failed to archive world snapshot \(id): \(error.localizedDescription)")
             self.error = .network(error.localizedDescription)
         }
     }

@@ -15,13 +15,17 @@ final class CharacterListViewModel {
     }
 
     func loadCharacters() async {
+        AppLogger.ui.info("Loading characters...")
         isLoading = true
         error = nil
         do {
             characters = try await endpoint.listCharacters()
+            AppLogger.ui.info("Loaded \(self.characters.count) characters")
         } catch let apiError as APIError {
+            AppLogger.ui.error("Failed to load characters: \(apiError.localizedDescription)")
             error = apiError
         } catch {
+            AppLogger.ui.error("Failed to load characters: \(error.localizedDescription)")
             self.error = .network(error.localizedDescription)
         }
         isLoading = false
@@ -33,8 +37,10 @@ final class CharacterListViewModel {
             _ = try await endpoint.archiveCharacter(id: id)
             await loadCharacters()
         } catch let apiError as APIError {
+            AppLogger.ui.error("Failed to archive character \(id): \(apiError.localizedDescription)")
             error = apiError
         } catch {
+            AppLogger.ui.error("Failed to archive character \(id): \(error.localizedDescription)")
             self.error = .network(error.localizedDescription)
         }
     }
