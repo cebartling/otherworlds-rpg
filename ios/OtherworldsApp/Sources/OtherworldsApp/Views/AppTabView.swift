@@ -14,6 +14,26 @@ struct AppTabView: View {
                 CharacterListView(client: configuration.makeHTTPClient())
             }
 
+            Tab("Inventory", systemImage: "bag.fill") {
+                InventoryListView(client: configuration.makeHTTPClient())
+            }
+
+            Tab("Sessions", systemImage: "play.rectangle.fill") {
+                CampaignRunListView(client: configuration.makeHTTPClient())
+            }
+
+            Tab("World", systemImage: "globe") {
+                WorldSnapshotListView(client: configuration.makeHTTPClient())
+            }
+
+            Tab("Rules", systemImage: "dice.fill") {
+                ResolutionListView(client: configuration.makeHTTPClient())
+            }
+
+            Tab("Content", systemImage: "doc.text.fill") {
+                CampaignListView(client: configuration.makeHTTPClient())
+            }
+
             Tab("Settings", systemImage: "gear") {
                 SettingsView(configuration: configuration)
             }
