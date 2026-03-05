@@ -61,6 +61,16 @@ cd ios/OtherworldsApp
 swift build
 ```
 
+## Observability
+
+The API server uses [tracing](https://docs.rs/tracing) for structured logging (JSON to stdout by default). To export traces via OpenTelemetry OTLP, set the collector endpoint:
+
+```sh
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 cargo run -p otherworlds-api
+```
+
+When `OTEL_EXPORTER_OTLP_ENDPOINT` is set, an OTLP gRPC span exporter is added alongside the stdout layer. The service is registered as `otherworlds-api`. Any OpenTelemetry-compatible collector (Jaeger, Grafana Tempo, etc.) can receive the traces.
+
 ## Documentation
 
 - [Product Manifesto](documentation/PRODUCT_MANIFESTO.md) — vision, principles, and design philosophy
