@@ -33,6 +33,9 @@
           <nav class="hidden md:flex items-center gap-1" aria-label="Main navigation">
             <NavLink href="/campaigns">Campaigns</NavLink>
             <NavLink href="/characters">Characters</NavLink>
+            <NavLink href="/inventory">Inventory</NavLink>
+            <NavLink href="/world">World</NavLink>
+            <NavLink href="/rules">Rules</NavLink>
             <NavLink href="/sessions">Sessions</NavLink>
             <NavLink href="/play">Play</NavLink>
           </nav>
@@ -71,6 +74,15 @@
         </div>
         <div onclick={closeMobileMenu} onkeydown={closeMobileMenu} role="presentation">
           <NavLink href="/characters">Characters</NavLink>
+        </div>
+        <div onclick={closeMobileMenu} onkeydown={closeMobileMenu} role="presentation">
+          <NavLink href="/inventory">Inventory</NavLink>
+        </div>
+        <div onclick={closeMobileMenu} onkeydown={closeMobileMenu} role="presentation">
+          <NavLink href="/world">World</NavLink>
+        </div>
+        <div onclick={closeMobileMenu} onkeydown={closeMobileMenu} role="presentation">
+          <NavLink href="/rules">Rules</NavLink>
         </div>
         <div onclick={closeMobileMenu} onkeydown={closeMobileMenu} role="presentation">
           <NavLink href="/sessions">Sessions</NavLink>
