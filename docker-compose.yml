@@ -36,10 +36,11 @@ services:
     build:
       context: ./web
       dockerfile: Dockerfile
+      args:
+        API_BASE_URL: http://api:3000
+        PUBLIC_APP_NAME: Otherworlds RPG
     container_name: otherworlds-web
     environment:
-      API_BASE_URL: http://api:3000
-      PUBLIC_APP_NAME: Otherworlds RPG
       PORT: 4173
     ports:
       - "${WEB_PORT:-4173}:4173"
