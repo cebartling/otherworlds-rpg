@@ -147,7 +147,9 @@ mod tests {
     use otherworlds_session::domain::events::{
         AggregateRegistered, CampaignRunStarted, CheckpointCreated, SessionEventKind,
     };
-    use otherworlds_test_support::{FixedClock, MockRng, MultiAggregateEventRepository, SequenceRng};
+    use otherworlds_test_support::{
+        FixedClock, MockRng, MultiAggregateEventRepository, SequenceRng,
+    };
     use uuid::Uuid;
 
     use super::*;
@@ -428,6 +430,9 @@ mod tests {
         .await;
 
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), DomainError::AggregateNotFound(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            DomainError::AggregateNotFound(_)
+        ));
     }
 }

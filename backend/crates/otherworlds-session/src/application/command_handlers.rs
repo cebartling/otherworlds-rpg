@@ -397,8 +397,7 @@ mod tests {
         handle_register_aggregate, handle_start_campaign_run,
     };
     use crate::domain::commands::{
-        ArchiveCampaignRun, BranchTimeline, CreateCheckpoint, RegisterAggregate,
-        StartCampaignRun,
+        ArchiveCampaignRun, BranchTimeline, CreateCheckpoint, RegisterAggregate, StartCampaignRun,
     };
     use crate::domain::events::{
         CampaignRunArchived, CampaignRunStarted, CheckpointCreated, SessionEventKind,

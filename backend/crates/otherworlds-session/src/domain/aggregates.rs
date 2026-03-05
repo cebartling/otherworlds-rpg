@@ -133,9 +133,7 @@ impl CampaignRun {
         rng: &mut dyn DeterministicRng,
     ) -> Result<(), DomainError> {
         if self.archived {
-            return Err(DomainError::Validation(
-                "campaign run is archived".into(),
-            ));
+            return Err(DomainError::Validation("campaign run is archived".into()));
         }
         if context_name.trim().is_empty() {
             return Err(DomainError::Validation(
@@ -617,8 +615,14 @@ mod tests {
         let mut run = CampaignRun::new(run_id);
 
         // Act
-        run.register_aggregate("narrative", aggregate_id, correlation_id, &clock, &mut MockRng)
-            .unwrap();
+        run.register_aggregate(
+            "narrative",
+            aggregate_id,
+            correlation_id,
+            &clock,
+            &mut MockRng,
+        )
+        .unwrap();
 
         // Assert
         let events = run.uncommitted_events();
@@ -670,7 +674,10 @@ mod tests {
         run.apply(&event);
 
         // Assert
-        assert_eq!(run.registered_aggregates.get("character"), Some(&aggregate_id));
+        assert_eq!(
+            run.registered_aggregates.get("character"),
+            Some(&aggregate_id)
+        );
         assert_eq!(run.version, 1);
     }
 
@@ -683,13 +690,8 @@ mod tests {
         let mut run = CampaignRun::new(run_id);
 
         // Act
-        let result = run.register_aggregate(
-            "",
-            Uuid::new_v4(),
-            Uuid::new_v4(),
-            &clock,
-            &mut MockRng,
-        );
+        let result =
+            run.register_aggregate("", Uuid::new_v4(), Uuid::new_v4(), &clock, &mut MockRng);
 
         // Assert
         assert!(result.is_err());

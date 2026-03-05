@@ -58,9 +58,11 @@ fn rewrite_uuid_in_value(value: &Value, old_id: Uuid, new_id: Uuid) -> Value {
                 .collect();
             Value::Object(new_map)
         }
-        Value::Array(arr) => {
-            Value::Array(arr.iter().map(|v| rewrite_uuid_in_value(v, old_id, new_id)).collect())
-        }
+        Value::Array(arr) => Value::Array(
+            arr.iter()
+                .map(|v| rewrite_uuid_in_value(v, old_id, new_id))
+                .collect(),
+        ),
         other => other.clone(),
     }
 }
@@ -116,9 +118,11 @@ mod tests {
         let fixed_now = Utc.with_ymd_and_hms(2026, 3, 1, 12, 0, 0).unwrap();
         let clock = FixedClock(fixed_now);
         let mut rng = SeqRng(0);
-        let source_events = vec![
-            make_stored_event(source_id, 1, json!({"session_id": source_id.to_string()})),
-        ];
+        let source_events = vec![make_stored_event(
+            source_id,
+            1,
+            json!({"session_id": source_id.to_string()}),
+        )];
 
         // Act
         let cloned = clone_events_for_branch(
