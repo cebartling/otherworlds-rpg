@@ -168,7 +168,7 @@ All seven domain crates are implemented with real aggregates, command handlers, 
 
 ### API Crate
 
-- **`otherworlds-api`** — Composition root with `AppState` holding `PgPool`, `Clock`, `Rng`, `PgEventRepository`. `ApiError` maps `DomainError` to HTTP status codes. Narrative routes fully wired (4 POST + 2 GET handlers) with `#[instrument]` tracing. Other 6 context routers are empty `Router::new()` stubs awaiting handler wiring. 127 tests.
+- **`otherworlds-api`** — Composition root with `AppState` holding `PgPool`, `Clock`, `Rng`, `PgEventRepository`. `ApiError` maps `DomainError` to HTTP status codes. All 7 domain context routers fully wired with command handlers, query handlers, and `#[instrument]` tracing. Includes a `/api/v1/play` route for cross-context orchestration. 127 tests.
 
 ### Domain Crates
 
@@ -182,7 +182,7 @@ All seven domain crates are implemented with real aggregates, command handlers, 
 
 ### Remaining Gaps
 
-- **No cross-context orchestration** — each bounded context operates in isolation; the play loop (narrative → rules → world-state → character) is not implemented.
+- **Cross-context orchestration** — a `/api/v1/play/resolve-action` route exists but the full play loop (narrative → rules → world-state → character) needs further development.
 - **Timeline branching** records intent only — does not replay source run events onto the forked stream.
 - **Web client** has route structure for all contexts but no API integration.
 - **iOS client** covers only narrative context.
