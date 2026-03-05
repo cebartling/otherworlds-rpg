@@ -133,7 +133,8 @@ impl CampaignRun {
                         checkpoint_id: payload.checkpoint_id,
                     })
                 }
-                SessionEventKind::TimelineBranched(_) | SessionEventKind::CampaignRunArchived(_) => {
+                SessionEventKind::TimelineBranched(_)
+                | SessionEventKind::CampaignRunArchived(_) => {
                     continue;
                 }
             };

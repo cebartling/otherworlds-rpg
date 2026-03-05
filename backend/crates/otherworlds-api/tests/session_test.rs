@@ -211,7 +211,9 @@ async fn test_session_branch_timeline_round_trip(pool: PgPool) {
     let app = common::build_test_app(pool);
     let (status, json) = common::get_json(app, &format!("/api/v1/sessions/{branch_run_id}")).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(json["version"], 1);
+    // Branched run replays source events (CampaignRunStarted + CheckpointCreated)
+    // then appends TimelineBranched, yielding version 3.
+    assert_eq!(json["version"], 3);
 }
 
 #[sqlx::test(migrations = "../../migrations")]
