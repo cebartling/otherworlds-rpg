@@ -8,19 +8,46 @@ use sqlx::postgres::PgPoolOptions;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+
+use opentelemetry::trace::TracerProvider;
 
 use otherworlds_api::error::AppError;
 use otherworlds_api::{routes, state};
 
 #[tokio::main]
 async fn main() -> Result<(), AppError> {
-    // Initialize tracing subscriber.
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .json()
-        .init();
+    // Initialize tracing subscriber with JSON stdout and optional OTLP export.
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let fmt_layer = tracing_subscriber::fmt::layer().json();
+
+    let registry = tracing_subscriber::registry()
+        .with(env_filter)
+        .with(fmt_layer);
+
+    if std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").is_ok() {
+        let tracer = opentelemetry_otlp::SpanExporter::builder()
+            .with_tonic()
+            .build()
+            .map_err(|e| AppError::Config(format!("failed to create OTLP exporter: {e}")))?;
+
+        let tracer_provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+            .with_batch_exporter(tracer)
+            .with_resource(
+                opentelemetry_sdk::Resource::builder()
+                    .with_service_name("otherworlds-api")
+                    .build(),
+            )
+            .build();
+
+        let otel_layer =
+            tracing_opentelemetry::layer().with_tracer(tracer_provider.tracer("otherworlds-api"));
+
+        registry.with(otel_layer).init();
+    } else {
+        registry.init();
+    }
 
     tracing::info!("Starting Otherworlds RPG API server");
 
