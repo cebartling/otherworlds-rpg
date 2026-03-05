@@ -97,6 +97,71 @@ impl EventRepository for RecordingEventRepository {
     }
 }
 
+/// An event repository that stores events per aggregate ID, supporting
+/// multi-aggregate test scenarios such as cross-context branching.
+#[derive(Debug)]
+pub struct MultiAggregateEventRepository {
+    events_by_aggregate: Mutex<std::collections::HashMap<Uuid, Vec<StoredEvent>>>,
+    appended: Mutex<Vec<(Uuid, i64, Vec<StoredEvent>)>>,
+}
+
+impl MultiAggregateEventRepository {
+    /// Creates a new multi-aggregate repository with pre-loaded events.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal mutex is poisoned.
+    #[must_use]
+    pub fn new(events_by_aggregate: std::collections::HashMap<Uuid, Vec<StoredEvent>>) -> Self {
+        Self {
+            events_by_aggregate: Mutex::new(events_by_aggregate),
+            appended: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Returns a snapshot of all events that were appended.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal mutex is poisoned.
+    pub fn appended_events(&self) -> Vec<(Uuid, i64, Vec<StoredEvent>)> {
+        self.appended.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl EventRepository for MultiAggregateEventRepository {
+    async fn load_events(&self, aggregate_id: Uuid) -> Result<Vec<StoredEvent>, DomainError> {
+        let guard = self.events_by_aggregate.lock().unwrap();
+        Ok(guard.get(&aggregate_id).cloned().unwrap_or_default())
+    }
+
+    async fn append_events(
+        &self,
+        aggregate_id: Uuid,
+        expected_version: i64,
+        events: &[StoredEvent],
+    ) -> Result<(), DomainError> {
+        self.appended
+            .lock()
+            .unwrap()
+            .push((aggregate_id, expected_version, events.to_vec()));
+        // Also store for subsequent load_events calls.
+        self.events_by_aggregate
+            .lock()
+            .unwrap()
+            .entry(aggregate_id)
+            .or_default()
+            .extend(events.to_vec());
+        Ok(())
+    }
+
+    async fn list_aggregate_ids(&self, _event_types: &[&str]) -> Result<Vec<Uuid>, DomainError> {
+        let guard = self.events_by_aggregate.lock().unwrap();
+        Ok(guard.keys().copied().collect())
+    }
+}
+
 /// An event repository that always returns an empty event list and silently
 /// accepts appends. Useful for testing "aggregate not found" scenarios and
 /// creation commands.

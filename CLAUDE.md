@@ -183,7 +183,7 @@ All seven domain crates are implemented with real aggregates, command handlers, 
 ### Remaining Gaps
 
 - **Cross-context orchestration** — a `/api/v1/play/resolve-action` route exists but the full play loop (narrative → rules → world-state → character) needs further development.
-- **Timeline branching** records intent only — does not replay source run events onto the forked stream.
+- **Timeline branching** — session-level replay is implemented. Cross-context replay is implemented via `orchestration::branch` in the API crate using `RegisterAggregate` events and `clone_events_for_branch` from core. Callers must register aggregates with a campaign run (via `RegisterAggregate` command) for them to be cloned during branching.
 - **Web client** has route structure for all contexts but no API integration.
 - **iOS client** covers only narrative context.
 - **Acceptance tests** have Screenplay pattern infrastructure but only one test suite (campaign pipeline).

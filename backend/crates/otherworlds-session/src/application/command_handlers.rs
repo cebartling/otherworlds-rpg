@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use crate::domain::aggregates::CampaignRun;
 use crate::domain::commands::{
-    ArchiveCampaignRun, BranchTimeline, CreateCheckpoint, StartCampaignRun,
+    ArchiveCampaignRun, BranchTimeline, CreateCheckpoint, RegisterAggregate, StartCampaignRun,
 };
 use crate::domain::events::{SessionEvent, SessionEventKind};
 
@@ -48,7 +48,7 @@ fn to_stored_event(event: &SessionEvent) -> StoredEvent {
 /// # Errors
 ///
 /// Returns `DomainError::Infrastructure` if event deserialization fails.
-pub(crate) fn reconstitute(
+pub fn reconstitute(
     run_id: Uuid,
     existing_events: &[StoredEvent],
 ) -> Result<CampaignRun, DomainError> {
@@ -292,6 +292,54 @@ pub async fn handle_branch_timeline(
     })
 }
 
+/// Handles the `RegisterAggregate` command: reconstitutes the aggregate,
+/// registers a cross-context aggregate, and persists the resulting events.
+///
+/// # Errors
+///
+/// Returns `DomainError::AggregateNotFound` if no events exist for the run ID.
+/// Returns `DomainError::Validation` if the run is archived or context name is empty.
+#[instrument(skip(clock, rng, repo), fields(run_id = %command.run_id, context_name = %command.context_name, correlation_id = %command.correlation_id))]
+pub async fn handle_register_aggregate(
+    command: &RegisterAggregate,
+    clock: &dyn Clock,
+    rng: &Mutex<dyn DeterministicRng + Send>,
+    repo: &dyn EventRepository,
+) -> Result<SessionCommandResult, DomainError> {
+    let existing_events = repo.load_events(command.run_id).await?;
+    if existing_events.is_empty() {
+        return Err(DomainError::AggregateNotFound(command.run_id));
+    }
+    let mut run = reconstitute(command.run_id, &existing_events)?;
+
+    {
+        let mut rng_guard = rng
+            .lock()
+            .map_err(|e| DomainError::Infrastructure(format!("RNG mutex poisoned: {e}")))?;
+        run.register_aggregate(
+            &command.context_name,
+            command.aggregate_id,
+            command.correlation_id,
+            clock,
+            &mut *rng_guard,
+        )?;
+    }
+
+    let stored_events: Vec<StoredEvent> = run
+        .uncommitted_events()
+        .iter()
+        .map(to_stored_event)
+        .collect();
+
+    repo.append_events(command.run_id, run.version(), &stored_events)
+        .await?;
+
+    Ok(SessionCommandResult {
+        aggregate_id: command.run_id,
+        stored_events,
+    })
+}
+
 /// Handles the `ArchiveCampaignRun` command: reconstitutes the aggregate,
 /// archives it (soft-delete), and persists the resulting events.
 ///
@@ -346,10 +394,11 @@ mod tests {
 
     use crate::application::command_handlers::{
         handle_archive_campaign_run, handle_branch_timeline, handle_create_checkpoint,
-        handle_start_campaign_run,
+        handle_register_aggregate, handle_start_campaign_run,
     };
     use crate::domain::commands::{
-        ArchiveCampaignRun, BranchTimeline, CreateCheckpoint, StartCampaignRun,
+        ArchiveCampaignRun, BranchTimeline, CreateCheckpoint, RegisterAggregate,
+        StartCampaignRun,
     };
     use crate::domain::events::{
         CampaignRunArchived, CampaignRunStarted, CheckpointCreated, SessionEventKind,
@@ -937,6 +986,76 @@ mod tests {
                 );
             }
             other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_register_aggregate_persists_aggregate_registered_event() {
+        // Arrange
+        let run_id = Uuid::new_v4();
+        let narrative_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
+        let existing_event = dummy_stored_event(run_id, fixed_now);
+        let repo = RecordingEventRepository::new(Ok(vec![existing_event]));
+
+        let command = RegisterAggregate {
+            correlation_id,
+            run_id,
+            context_name: "narrative".to_owned(),
+            aggregate_id: narrative_id,
+        };
+
+        // Act
+        let result = handle_register_aggregate(&command, &clock, &*rng, &repo).await;
+
+        // Assert
+        let cmd_result = result.unwrap();
+        assert_eq!(cmd_result.aggregate_id, run_id);
+        assert_eq!(cmd_result.stored_events.len(), 1);
+
+        let appended = repo.appended_events();
+        assert_eq!(appended.len(), 1);
+
+        let (agg_id, expected_version, events) = &appended[0];
+        assert_eq!(*agg_id, run_id);
+        assert_eq!(*expected_version, 1);
+        assert_eq!(events.len(), 1);
+
+        let stored = &events[0];
+        assert_eq!(stored.event_type, "session.aggregate_registered");
+        assert_eq!(stored.aggregate_id, run_id);
+        assert_eq!(stored.sequence_number, 2);
+        assert_eq!(stored.correlation_id, correlation_id);
+    }
+
+    #[tokio::test]
+    async fn test_handle_register_aggregate_returns_error_when_run_not_found() {
+        // Arrange
+        let run_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let rng: Arc<Mutex<dyn DeterministicRng + Send>> = Arc::new(Mutex::new(MockRng));
+        let repo = RecordingEventRepository::new(Ok(Vec::new()));
+
+        let command = RegisterAggregate {
+            correlation_id,
+            run_id,
+            context_name: "narrative".to_owned(),
+            aggregate_id: Uuid::new_v4(),
+        };
+
+        // Act
+        let result = handle_register_aggregate(&command, &clock, &*rng, &repo).await;
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::AggregateNotFound(id) => assert_eq!(id, run_id),
+            other => panic!("expected AggregateNotFound, got {other:?}"),
         }
     }
 }

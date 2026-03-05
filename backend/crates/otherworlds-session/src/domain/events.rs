@@ -33,6 +33,17 @@ pub struct TimelineBranched {
     pub from_checkpoint_id: Uuid,
 }
 
+/// Emitted when an aggregate from another context is registered with a run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AggregateRegistered {
+    /// The campaign run identifier.
+    pub run_id: Uuid,
+    /// The bounded context name (e.g. "narrative", "character").
+    pub context_name: String,
+    /// The aggregate ID in the other context.
+    pub aggregate_id: Uuid,
+}
+
 /// Emitted when a campaign run is archived (soft-deleted).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CampaignRunArchived {
@@ -49,6 +60,9 @@ pub const CHECKPOINT_CREATED_EVENT_TYPE: &str = "session.checkpoint_created";
 /// Event type identifier for [`TimelineBranched`].
 pub const TIMELINE_BRANCHED_EVENT_TYPE: &str = "session.timeline_branched";
 
+/// Event type identifier for [`AggregateRegistered`].
+pub const AGGREGATE_REGISTERED_EVENT_TYPE: &str = "session.aggregate_registered";
+
 /// Event type identifier for [`CampaignRunArchived`].
 pub const CAMPAIGN_RUN_ARCHIVED_EVENT_TYPE: &str = "session.campaign_run_archived";
 
@@ -61,6 +75,8 @@ pub enum SessionEventKind {
     CheckpointCreated(CheckpointCreated),
     /// A timeline has been branched.
     TimelineBranched(TimelineBranched),
+    /// An aggregate from another context has been registered with this run.
+    AggregateRegistered(AggregateRegistered),
     /// A campaign run has been archived (soft-deleted).
     CampaignRunArchived(CampaignRunArchived),
 }
@@ -80,6 +96,7 @@ impl DomainEvent for SessionEvent {
             SessionEventKind::CampaignRunStarted(_) => CAMPAIGN_RUN_STARTED_EVENT_TYPE,
             SessionEventKind::CheckpointCreated(_) => CHECKPOINT_CREATED_EVENT_TYPE,
             SessionEventKind::TimelineBranched(_) => TIMELINE_BRANCHED_EVENT_TYPE,
+            SessionEventKind::AggregateRegistered(_) => AGGREGATE_REGISTERED_EVENT_TYPE,
             SessionEventKind::CampaignRunArchived(_) => CAMPAIGN_RUN_ARCHIVED_EVENT_TYPE,
         }
     }

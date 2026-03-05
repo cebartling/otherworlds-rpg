@@ -112,27 +112,23 @@ async fn branch_timeline(
     State(state): State<AppState>,
     Json(request): Json<BranchTimelineRequest>,
 ) -> Result<Json<CommandResponse>, ApiError> {
-    let command = commands::BranchTimeline {
-        correlation_id: Uuid::new_v4(),
-        source_run_id: request.source_run_id,
-        from_checkpoint_id: request.from_checkpoint_id,
-    };
+    let correlation_id = Uuid::new_v4();
 
-    info!(correlation_id = %command.correlation_id, "handling branch_timeline command");
+    info!(correlation_id = %correlation_id, "handling branch_timeline command with cross-context orchestration");
 
-    let result = command_handlers::handle_branch_timeline(
-        &command,
+    let result = crate::orchestration::branch::orchestrate_branch_timeline(
+        request.source_run_id,
+        request.from_checkpoint_id,
+        correlation_id,
         state.clock.as_ref(),
         &*state.rng,
         &*state.event_repository,
     )
     .await?;
 
-    let event_ids = result.stored_events.iter().map(|e| e.event_id).collect();
-
     Ok(Json(CommandResponse {
-        aggregate_id: result.aggregate_id,
-        event_ids,
+        aggregate_id: result.branch_run_id,
+        event_ids: result.event_ids,
     }))
 }
 

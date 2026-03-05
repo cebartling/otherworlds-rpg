@@ -7,10 +7,13 @@ use otherworlds_core::event::EventMetadata;
 use otherworlds_core::rng::DeterministicRng;
 use uuid::Uuid;
 
+use std::collections::HashMap;
+
 use super::events::{
-    CAMPAIGN_RUN_ARCHIVED_EVENT_TYPE, CAMPAIGN_RUN_STARTED_EVENT_TYPE,
-    CHECKPOINT_CREATED_EVENT_TYPE, CampaignRunArchived, CampaignRunStarted, CheckpointCreated,
-    SessionEvent, SessionEventKind, TIMELINE_BRANCHED_EVENT_TYPE, TimelineBranched,
+    AGGREGATE_REGISTERED_EVENT_TYPE, AggregateRegistered, CAMPAIGN_RUN_ARCHIVED_EVENT_TYPE,
+    CAMPAIGN_RUN_STARTED_EVENT_TYPE, CHECKPOINT_CREATED_EVENT_TYPE, CampaignRunArchived,
+    CampaignRunStarted, CheckpointCreated, SessionEvent, SessionEventKind,
+    TIMELINE_BRANCHED_EVENT_TYPE, TimelineBranched,
 };
 
 /// The aggregate root for a campaign run.
@@ -26,6 +29,8 @@ pub struct CampaignRun {
     pub(crate) checkpoint_ids: Vec<Uuid>,
     /// Branch source: (`source_run_id`, `from_checkpoint_id`) if this run was branched.
     pub(crate) branch_source: Option<(Uuid, Uuid)>,
+    /// Registered aggregates from other bounded contexts: `context_name` → `aggregate_id`.
+    pub(crate) registered_aggregates: HashMap<String, Uuid>,
     /// Whether this campaign run has been archived (soft-deleted).
     pub(crate) archived: bool,
     /// Uncommitted events pending persistence.
@@ -42,9 +47,16 @@ impl CampaignRun {
             campaign_id: None,
             checkpoint_ids: Vec::new(),
             branch_source: None,
+            registered_aggregates: HashMap::new(),
             archived: false,
             uncommitted_events: Vec::new(),
         }
+    }
+
+    /// Returns the registered aggregates from other bounded contexts.
+    #[must_use]
+    pub fn registered_aggregates(&self) -> &HashMap<String, Uuid> {
+        &self.registered_aggregates
     }
 
     /// Returns the next sequence number for a new event.
@@ -106,6 +118,51 @@ impl CampaignRun {
         self.uncommitted_events.push(event);
     }
 
+    /// Registers an aggregate from another bounded context with this run.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DomainError::Validation` if the campaign run is archived or
+    /// if the context name is empty.
+    pub fn register_aggregate(
+        &mut self,
+        context_name: &str,
+        aggregate_id: Uuid,
+        correlation_id: Uuid,
+        clock: &dyn Clock,
+        rng: &mut dyn DeterministicRng,
+    ) -> Result<(), DomainError> {
+        if self.archived {
+            return Err(DomainError::Validation(
+                "campaign run is archived".into(),
+            ));
+        }
+        if context_name.trim().is_empty() {
+            return Err(DomainError::Validation(
+                "context name must not be empty".into(),
+            ));
+        }
+        let event = SessionEvent {
+            metadata: EventMetadata {
+                event_id: rng.next_uuid(),
+                event_type: AGGREGATE_REGISTERED_EVENT_TYPE.to_owned(),
+                aggregate_id: self.id,
+                sequence_number: self.next_sequence_number(),
+                correlation_id,
+                causation_id: correlation_id,
+                occurred_at: clock.now(),
+            },
+            kind: SessionEventKind::AggregateRegistered(AggregateRegistered {
+                run_id: self.id,
+                context_name: context_name.to_owned(),
+                aggregate_id,
+            }),
+        };
+
+        self.uncommitted_events.push(event);
+        Ok(())
+    }
+
     /// Replays source run events onto this branch, rewriting `run_id` fields
     /// to point to the branch. Used during timeline branching to fork the
     /// event stream up to a checkpoint.
@@ -131,6 +188,13 @@ impl CampaignRun {
                     SessionEventKind::CheckpointCreated(CheckpointCreated {
                         run_id: self.id,
                         checkpoint_id: payload.checkpoint_id,
+                    })
+                }
+                SessionEventKind::AggregateRegistered(payload) => {
+                    SessionEventKind::AggregateRegistered(AggregateRegistered {
+                        run_id: self.id,
+                        context_name: payload.context_name.clone(),
+                        aggregate_id: payload.aggregate_id,
                     })
                 }
                 SessionEventKind::TimelineBranched(_)
@@ -240,6 +304,10 @@ impl AggregateRoot for CampaignRun {
             }
             SessionEventKind::TimelineBranched(payload) => {
                 self.branch_source = Some((payload.source_run_id, payload.from_checkpoint_id));
+            }
+            SessionEventKind::AggregateRegistered(payload) => {
+                self.registered_aggregates
+                    .insert(payload.context_name.clone(), payload.aggregate_id);
             }
             SessionEventKind::CampaignRunArchived(_) => {
                 self.archived = true;
@@ -536,6 +604,133 @@ mod tests {
         // Assert
         assert!(run.archived);
         assert_eq!(run.version, 1);
+    }
+
+    #[test]
+    fn test_register_aggregate_produces_aggregate_registered_event() {
+        // Arrange
+        let run_id = Uuid::new_v4();
+        let aggregate_id = Uuid::new_v4();
+        let correlation_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let mut run = CampaignRun::new(run_id);
+
+        // Act
+        run.register_aggregate("narrative", aggregate_id, correlation_id, &clock, &mut MockRng)
+            .unwrap();
+
+        // Assert
+        let events = run.uncommitted_events();
+        assert_eq!(events.len(), 1);
+
+        let event = &events[0];
+        assert_eq!(event.event_type(), "session.aggregate_registered");
+
+        let meta = event.metadata();
+        assert_eq!(meta.aggregate_id, run_id);
+        assert_eq!(meta.sequence_number, 1);
+        assert_eq!(meta.correlation_id, correlation_id);
+
+        match &event.kind {
+            SessionEventKind::AggregateRegistered(payload) => {
+                assert_eq!(payload.run_id, run_id);
+                assert_eq!(payload.context_name, "narrative");
+                assert_eq!(payload.aggregate_id, aggregate_id);
+            }
+            other => panic!("expected AggregateRegistered, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_apply_aggregate_registered_inserts_into_registered_aggregates() {
+        // Arrange
+        let run_id = Uuid::new_v4();
+        let aggregate_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let mut run = CampaignRun::new(run_id);
+        let event = SessionEvent {
+            metadata: EventMetadata {
+                event_id: Uuid::new_v4(),
+                event_type: AGGREGATE_REGISTERED_EVENT_TYPE.to_owned(),
+                aggregate_id: run_id,
+                sequence_number: 1,
+                correlation_id: Uuid::new_v4(),
+                causation_id: Uuid::new_v4(),
+                occurred_at: fixed_now,
+            },
+            kind: SessionEventKind::AggregateRegistered(AggregateRegistered {
+                run_id,
+                context_name: "character".to_owned(),
+                aggregate_id,
+            }),
+        };
+
+        // Act
+        run.apply(&event);
+
+        // Assert
+        assert_eq!(run.registered_aggregates.get("character"), Some(&aggregate_id));
+        assert_eq!(run.version, 1);
+    }
+
+    #[test]
+    fn test_register_aggregate_rejects_empty_context_name() {
+        // Arrange
+        let run_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let mut run = CampaignRun::new(run_id);
+
+        // Act
+        let result = run.register_aggregate(
+            "",
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            &clock,
+            &mut MockRng,
+        );
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::Validation(msg) => {
+                assert_eq!(msg, "context name must not be empty");
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_register_aggregate_rejects_when_archived() {
+        // Arrange
+        let run_id = Uuid::new_v4();
+        let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 0).unwrap();
+        let clock = FixedClock(fixed_now);
+        let mut run = CampaignRun::new(run_id);
+        run.archive(Uuid::new_v4(), &clock, &mut MockRng).unwrap();
+        for event in run.uncommitted_events().to_vec() {
+            run.apply(&event);
+        }
+        run.clear_uncommitted_events();
+
+        // Act
+        let result = run.register_aggregate(
+            "narrative",
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            &clock,
+            &mut MockRng,
+        );
+
+        // Assert
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DomainError::Validation(msg) => {
+                assert_eq!(msg, "campaign run is archived");
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
     }
 
     #[test]

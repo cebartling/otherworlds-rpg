@@ -62,6 +62,29 @@ impl Command for BranchTimeline {
     }
 }
 
+/// Command to register an aggregate from another bounded context with a campaign run.
+#[derive(Debug, Clone)]
+pub struct RegisterAggregate {
+    /// The correlation ID for tracing.
+    pub correlation_id: Uuid,
+    /// The campaign run to register with.
+    pub run_id: Uuid,
+    /// The bounded context name (e.g. "narrative", "character").
+    pub context_name: String,
+    /// The aggregate ID in the other context.
+    pub aggregate_id: Uuid,
+}
+
+impl Command for RegisterAggregate {
+    fn command_type(&self) -> &'static str {
+        "session.register_aggregate"
+    }
+
+    fn correlation_id(&self) -> Uuid {
+        self.correlation_id
+    }
+}
+
 /// Command to archive (soft-delete) a campaign run.
 #[derive(Debug, Clone)]
 pub struct ArchiveCampaignRun {

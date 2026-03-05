@@ -3,6 +3,8 @@
 //! This module contains query handlers that reconstitute aggregates
 //! from stored events and return read-only view DTOs.
 
+use std::collections::HashMap;
+
 use otherworlds_core::error::DomainError;
 use otherworlds_core::repository::EventRepository;
 use serde::Serialize;
@@ -23,6 +25,8 @@ pub struct CampaignRunView {
     pub campaign_id: Option<Uuid>,
     /// Checkpoint IDs created during this run.
     pub checkpoint_ids: Vec<Uuid>,
+    /// Registered aggregates from other bounded contexts.
+    pub registered_aggregates: HashMap<String, Uuid>,
     /// Current version (event count).
     pub version: i64,
 }
@@ -32,6 +36,7 @@ const EVENT_TYPES: &[&str] = &[
     "session.campaign_run_started",
     "session.checkpoint_created",
     "session.timeline_branched",
+    "session.aggregate_registered",
     "session.campaign_run_archived",
 ];
 
@@ -96,6 +101,7 @@ pub async fn get_campaign_run_by_id(
         run_id,
         campaign_id: run.campaign_id,
         checkpoint_ids: run.checkpoint_ids.clone(),
+        registered_aggregates: run.registered_aggregates.clone(),
         version: run.version,
     })
 }

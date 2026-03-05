@@ -4,6 +4,7 @@
 //! contexts depend on. It contains no infrastructure code.
 
 pub mod aggregate;
+pub mod branching;
 pub mod clock;
 pub mod command;
 pub mod error;
