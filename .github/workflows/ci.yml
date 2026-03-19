@@ -107,9 +107,6 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
-      - name: Download iOS Simulator runtime
-        run: xcodebuild -downloadPlatform iOS
-
       - name: Build
         run: >-
           xcodebuild build
