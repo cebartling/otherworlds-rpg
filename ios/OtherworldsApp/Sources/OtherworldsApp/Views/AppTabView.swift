@@ -34,6 +34,10 @@ struct AppTabView: View {
                 CampaignListView(client: configuration.makeHTTPClient())
             }
 
+            Tab("Play", systemImage: "bolt.fill") {
+                ResolveActionView(client: configuration.makeHTTPClient())
+            }
+
             Tab("Settings", systemImage: "gear") {
                 SettingsView(configuration: configuration)
             }
